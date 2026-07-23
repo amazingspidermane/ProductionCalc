@@ -1,4 +1,5 @@
 import './styles.css';
+import Swal from 'sweetalert2';
 import { initializeApp } from "firebase/app";
 import { 
   getFirestore, collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc 
@@ -97,11 +98,6 @@ let currentSkuYields = { casesPerGal: 0, casesPerPlt: 0 };
 // --- INIT ---
 async function init() {
   try {
-    // --- UI FIX: Force visible text in ALL Admin Panel inputs ---
-    const styleFix = document.createElement("style");
-    styleFix.innerHTML = `#admin-panel input, #admin-panel select, #admin-panel textarea { color: #0f172a !important;  background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; }`;
-    document.head.appendChild(styleFix);
-
     // --- BACKGROUND CYCLER ---
     const currentBgIndex = parseInt(localStorage.getItem('bgCycleIndex') || '0');
     document.body.classList.add('bg-' + ((currentBgIndex % 4) + 1));
@@ -212,7 +208,7 @@ function injectProTip() {
 }
 
 // --- CLOUD MIGRATION TOOL ---
-function migrateDataToCloud() {
+async function migrateDataToCloud() {
   const tabNames = {
     'materials': 'Materials',
     'products': 'Products',
@@ -220,22 +216,32 @@ function migrateDataToCloud() {
   };
   const currentName = tabNames[currentAdminTab] || 'Data';
 
-  if(!confirm(`Are you sure? This will push all of your default ${currentName} to the cloud. Clicking this multiple times will create duplicates!`)) return;
+  const result = await Swal.fire({
+    title: 'Migrate to Cloud?',
+    text: `This will push all default ${currentName} to the cloud. Clicking multiple times will create duplicates!`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#b91c1c',
+    cancelButtonColor: '#6b7280',
+    confirmButtonText: 'Yes, migrate it!'
+  });
+  if (!result.isConfirmed) return;
   
   try {
     if (currentAdminTab === 'materials') {
-        for(const [name, data] of Object.entries(DEFAULT_MATERIALS)) { addDoc(collection(db, "materials"), { name, ...data }); }
+        for(const [name, data] of Object.entries(DEFAULT_MATERIALS)) { await addDoc(collection(db, "materials"), { name, ...data }); }
     } else if (currentAdminTab === 'products') {
-        for(const [name, data] of Object.entries(DEFAULT_PRODUCTS)) { addDoc(collection(db, "products"), { name, ...data }); }
+        for(const [name, data] of Object.entries(DEFAULT_PRODUCTS)) { await addDoc(collection(db, "products"), { name, ...data }); }
     } else if (currentAdminTab === 'qacodes') {
-        for(const item of DATE_CODE_BOTTLES) { addDoc(collection(db, "qacodes"), { name: item.name, category: "bottle", weeks: item.weeks }); }
-        for(const item of DATE_CODE_CANS) { addDoc(collection(db, "qacodes"), { name: item.name, category: "can", weeks: item.weeks }); }
+        for(const item of DATE_CODE_BOTTLES) { await addDoc(collection(db, "qacodes"), { name: item.name, category: "bottle", weeks: item.weeks }); }
+        for(const item of DATE_CODE_CANS) { await addDoc(collection(db, "qacodes"), { name: item.name, category: "can", weeks: item.weeks }); }
     }
-    alert(`${currentName} migration complete!`);
+    Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `${currentName} migration complete!`, showConfirmButton: false, timer: 3000 });
   } catch (e) {
-    alert(`Error migrating ${currentName}: ` + e.message);
+    Swal.fire({ toast: true, position: 'top-end', icon: 'error', title: `Error migrating: ${e.message}`, showConfirmButton: false, timer: 3000 });
   }
 }
+window.migrateDataToCloud = migrateDataToCloud;
 
 // --- AUTHENTICATION & ADMIN UI ---
 function setupAuthUI() {
@@ -295,9 +301,10 @@ function setupAuthUI() {
                submitBtn.disabled = true;
                try {
                    await signInWithEmailAndPassword(auth, email, password);
+                   Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Logged in successfully', showConfirmButton: false, timer: 2000 });
                    overlay.remove();
                } catch (error) {
-                   alert("Login Failed: " + error.message);
+                   Swal.fire({ icon: 'error', title: 'Login Failed', text: error.message, confirmButtonColor: '#b91c1c' });
                    submitBtn.innerText = "Login";
                    submitBtn.disabled = false;
                }
@@ -456,7 +463,18 @@ function renderAdminList() {
         btn.addEventListener('click', async (e) => {
             const button = e.target.closest('button');
             const ids = JSON.parse(button.dataset.ids);
-            if(confirm("Are you sure you want to delete this from the Cloud?")) {
+            
+            const result = await Swal.fire({
+                title: 'Delete from Cloud?',
+                text: "Are you sure you want to delete this?",
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#b91c1c',
+                cancelButtonColor: '#6b7280',
+                confirmButtonText: 'Yes, delete it!'
+            });
+            
+            if(result.isConfirmed) {
                 let colName = currentAdminTab === 'products' ? 'products' : (currentAdminTab === 'qacodes' ? 'qacodes' : 'materials');
                 try {
                     // Delete ALL duplicates of this item at the exact same time
@@ -464,8 +482,9 @@ function renderAdminList() {
                         await deleteDoc(doc(db, colName, id));
                         if (editingId === id) resetAdminForm();
                     }
+                    Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Deleted successfully', showConfirmButton: false, timer: 2000 });
                 } catch(err) {
-                    alert("Error deleting: " + err.message);
+                    Swal.fire({ toast: true, position: 'top-end', icon: 'error', title: 'Error deleting', text: err.message, showConfirmButton: false, timer: 3000 });
                 }
             }
         });
@@ -647,11 +666,33 @@ function calculateDateCode() {
 }
 
 function switchTab(tab) {
+  if (currentActiveTab === tab) return;
   currentActiveTab = tab;
-  document.querySelectorAll("#content-syrup, #content-materials, #content-datecode").forEach(el => el.classList.add("hidden"));
+  
+  document.querySelectorAll(".tab-pane").forEach(el => {
+    el.classList.remove("active");
+    setTimeout(() => {
+        if(!el.classList.contains("active")) el.classList.add("hidden");
+    }, 200); // Wait for fade out
+  });
+  
   document.querySelectorAll(".nav-tab").forEach(el => el.classList.remove("active"));
-  document.getElementById("content-" + tab).classList.remove("hidden");
+  
+  setTimeout(() => {
+      const target = document.getElementById("content-" + tab);
+      target.classList.remove("hidden");
+      // Small delay to allow display block to apply before opacity transition
+      setTimeout(() => target.classList.add("active"), 10);
+  }, 200);
+  
   document.getElementById("tab-" + tab).classList.add("active");
+  
+  // Auto-focus first input of the new tab
+  setTimeout(() => {
+      if (tab === 'syrup') document.getElementById('syrup-product')?.focus();
+      else if (tab === 'materials') document.getElementById('mat-select')?.focus();
+      else if (tab === 'datecode') document.getElementById('datecode-product')?.focus();
+  }, 250);
 }
 
 function updateSyrupProduct() {
@@ -849,14 +890,20 @@ function calculateMaterial() {
 
   const neededEl = document.getElementById("mat-needed");
   if (data && !isNaN(target) && target > 0) {
-      neededEl.innerText = (target / (data.unitsPerPallet / data.unitsPerCase)).toFixed(2);
+      const finalVal = target / (data.unitsPerPallet / data.unitsPerCase);
+      if(window.animateNumber) window.animateNumber(neededEl, finalVal);
+      else neededEl.innerText = finalVal.toFixed(2);
   } else {
-      neededEl.innerText = "0.00";
+      if(window.animateNumber) window.animateNumber(neededEl, 0);
+      else neededEl.innerText = "0.00";
   }
 }
 
 function clearMaterial() {
-  document.getElementById("mat-target").value = ""; document.getElementById("mat-needed").innerText = "0.00";
+  document.getElementById("mat-target").value = ""; 
+  const neededEl = document.getElementById("mat-needed");
+  if(window.animateNumber) window.animateNumber(neededEl, 0);
+  else neededEl.innerText = "0.00";
 }
 
 function handleMath(el, callback) {
@@ -885,3 +932,74 @@ window.saveMaterial = saveMaterial;
 window.saveProduct = saveProduct;
 window.saveQACode = saveQACode;
 window.resetAdminForm = resetAdminForm;
+
+// --- NUMBER ANIMATION ---
+const animationStates = new Map();
+window.animateNumber = function(el, endVal, duration = 400) {
+    if(!el) return;
+    const end = parseFloat(endVal) || 0;
+    
+    if (animationStates.has(el.id)) {
+        cancelAnimationFrame(animationStates.get(el.id));
+    }
+    
+    let currentText = el.innerText.replace(/[^0-9.-]/g, '');
+    let start = parseFloat(currentText);
+    if(isNaN(start)) start = 0;
+    
+    if (start === end) {
+        el.innerText = end.toFixed(2);
+        return;
+    }
+
+    let startTime = null;
+    const step = (timestamp) => {
+        if (!startTime) startTime = timestamp;
+        const progress = Math.min((timestamp - startTime) / duration, 1);
+        const easeProgress = 1 - Math.pow(1 - progress, 4); // easeOutQuart
+        const current = start + (end - start) * easeProgress;
+        
+        el.innerText = current.toFixed(2);
+        
+        if (progress < 1) {
+            animationStates.set(el.id, requestAnimationFrame(step));
+        } else {
+            animationStates.delete(el.id);
+        }
+    };
+    animationStates.set(el.id, requestAnimationFrame(step));
+};
+
+// --- DARK MODE TOGGLE ---
+const themeToggle = document.getElementById('theme-toggle');
+const themeIcon = document.getElementById('theme-toggle-icon');
+
+function applyTheme(isDark) {
+    if(isDark) {
+        document.body.classList.add('dark-mode');
+        if(themeIcon) { themeIcon.classList.remove('fa-moon'); themeIcon.classList.add('fa-sun'); }
+    } else {
+        document.body.classList.remove('dark-mode');
+        if(themeIcon) { themeIcon.classList.remove('fa-sun'); themeIcon.classList.add('fa-moon'); }
+    }
+}
+
+if(themeToggle) {
+    themeToggle.addEventListener('click', () => {
+        const isDark = !document.body.classList.contains('dark-mode');
+        localStorage.setItem('darkMode', isDark ? 'enabled' : 'disabled');
+        applyTheme(isDark);
+    });
+    
+    // Initial Load
+    if(localStorage.getItem('darkMode') === 'enabled') {
+        applyTheme(true);
+    }
+}
+
+// Keyboard Shortcuts
+document.addEventListener('keydown', (e) => {
+    if (e.altKey && e.key === '1') { e.preventDefault(); switchTab('syrup'); }
+    else if (e.altKey && e.key === '2') { e.preventDefault(); switchTab('materials'); }
+    else if (e.altKey && e.key === '3') { e.preventDefault(); switchTab('datecode'); }
+});

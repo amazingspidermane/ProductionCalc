@@ -1,8 +1,29 @@
-<script type="module" crossorigin src="/assets/index-BGrjnZR5.js"></script>
-<link rel="stylesheet" crossorigin href="/assets/index-D9rspX-6.css">
-<!-- Font Awesome -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Mobile & Safari Optimizations -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#b91c1c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>Production Calculator</title>
+  
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  
+  <!-- Font Awesome -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+  <script type="module" crossorigin src="/assets/index-CYD4um_Z.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CvClC2NW.css">
+</head>
+<body class="antialiased">
 
+<!-- FIZZ ANIMATION CONTAINER -->
+<div id="fizz-container" class="fizz-container"></div>
 
 <!-- WEBSITE NAVBAR -->
 <nav class="sticky top-0 z-50 bg-black/30 backdrop-blur-2xl border-b border-white/10 shadow-2xl">
@@ -24,13 +45,11 @@
         </div>
       </div>
 
-      <!-- Right Side: Login Buttons -->
-      <div class="flex items-center">
-        <button id="login-btn" class="text-sm bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-md px-4 sm:px-6 py-2 rounded-full text-white font-bold transition-all flex items-center group shadow-sm">
-          <i class="fas fa-lock mr-2 text-red-400 group-hover:text-red-300 transition-colors"></i><span class="hidden sm:inline">Admin</span> Login
-        </button>
-        <button id="logout-btn" class="hidden text-sm bg-red-600 hover:bg-red-500 border border-red-400/50 backdrop-blur-md px-4 sm:px-6 py-2 rounded-full text-white font-bold transition-all shadow-[0_0_15px_rgba(220,38,38,0.4)]">
-          Sign Out
+      <!-- Right Side: Controls -->
+      <div class="flex items-center space-x-4">
+        <!-- Dark Mode Toggle -->
+        <button id="theme-toggle" class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center text-white transition-all hover:scale-110 active:scale-95 shadow-sm">
+          <i id="theme-toggle-icon" class="fas fa-moon"></i>
         </button>
       </div>
 
@@ -123,16 +142,34 @@
             <!-- Right: Database List -->
             <div class="flex-1 border-t md:border-t-0 md:border-l border-slate-200 pt-4 md:pt-0 md:pl-8">
                 <h4 class="font-bold text-gray-800 mb-4"><i class="fas fa-list mr-2"></i> Live Database</h4>
-                <div id="admin-database-list" class="max-h-80 overflow-y-auto pr-2 space-y-1 bg-slate-50 rounded-md p-3 border border-slate-200">
-                    <div class="text-sm text-slate-400 italic text-center py-4">Loading list...</div>
+                <div id="admin-database-list" class="max-h-80 overflow-y-auto pr-2 space-y-3 bg-slate-50 rounded-md p-3 border border-slate-200">
+                    <!-- Skeleton Loaders -->
+                    <div class="animate-pulse flex space-x-4">
+                      <div class="flex-1 space-y-4 py-1">
+                        <div class="h-4 bg-slate-200 rounded w-3/4"></div>
+                        <div class="h-4 bg-slate-200 rounded w-1/2"></div>
+                      </div>
+                    </div>
+                    <div class="animate-pulse flex space-x-4 opacity-70">
+                      <div class="flex-1 space-y-4 py-1">
+                        <div class="h-4 bg-slate-200 rounded w-5/6"></div>
+                        <div class="h-4 bg-slate-200 rounded w-2/3"></div>
+                      </div>
+                    </div>
+                    <div class="animate-pulse flex space-x-4 opacity-40">
+                      <div class="flex-1 space-y-4 py-1">
+                        <div class="h-4 bg-slate-200 rounded w-2/3"></div>
+                        <div class="h-4 bg-slate-200 rounded w-1/2"></div>
+                      </div>
+                    </div>
                 </div>
             </div>
         </div>
       </div>
 
-      <div class="glass-panel rounded-xl shadow-sm overflow-hidden min-h-[500px]">
+      <div class="glass-panel rounded-xl shadow-sm overflow-visible min-h-[500px]">
         <!-- Main Tabs -->
-        <div class="flex border-b border-slate-200/50 bg-white/30 backdrop-blur-sm overflow-x-auto">
+        <div class="flex border-b border-slate-200/50 bg-white/70 backdrop-blur-md overflow-x-auto sticky top-[80px] z-40 shadow-sm">
           <button onclick="switchTab('syrup')" id="tab-syrup" class="nav-tab active flex-1 py-4 text-center font-bold text-sm sm:text-base flex items-center justify-center gap-2 min-w-max px-6">
             <i class="fas fa-wine-bottle"></i> Syrup
           </button>
@@ -145,7 +182,7 @@
         </div>
 
         <!-- SYRUP CONTENT -->
-        <div id="content-syrup" class="p-6 sm:p-8 block">
+        <div id="content-syrup" class="p-6 sm:p-8 tab-pane active">
           <div class="mb-8">
             <label class="input-label">Select SKU / Product Size</label>
             <div class="relative">
@@ -158,7 +195,7 @@
           <!-- 6-Way Grid -->
           <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             <!-- Syrup -->
-            <div class="bg-white/50 p-4 rounded-lg border border-slate-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-slate-300">
+            <div class="bg-white/50 p-4 rounded-lg border border-slate-200 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md focus-within:ring-2 focus-within:ring-slate-300">
               <label class="input-label text-gray-600 flex items-center"><i class="fas fa-fill-drip mr-2 text-slate-400"></i>Syrup (Gallons)</label>
               <div class="relative">
                 <input type="text" inputmode="decimal" id="syrup-gals" placeholder="0" class="input-field block w-full bg-white/90 border-slate-300 rounded-md py-3 text-center text-2xl font-bold text-gray-900 focus:border-slate-500 outline-none" oninput="calculateSyrup('gals')" onchange="handleMath(this, () => calculateSyrup('gals'))" />
@@ -166,7 +203,7 @@
               </div>
             </div>
             <!-- Pallets -->
-            <div class="bg-white/50 p-4 rounded-lg border border-slate-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-slate-300">
+            <div class="bg-white/50 p-4 rounded-lg border border-slate-200 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md focus-within:ring-2 focus-within:ring-slate-300">
               <label class="input-label text-gray-600 flex items-center"><i class="fas fa-pallet mr-2 text-slate-400"></i>Can Bodies</label>
               <div class="relative">
                 <input type="text" inputmode="decimal" id="syrup-plts" placeholder="0" class="input-field block w-full bg-white/90 border-slate-300 rounded-md py-3 text-center text-2xl font-bold text-gray-900 focus:border-slate-500 outline-none" oninput="calculateSyrup('plts')" onchange="handleMath(this, () => calculateSyrup('plts'))" />
@@ -174,7 +211,7 @@
               </div>
             </div>
             <!-- Standard -->
-            <div class="bg-red-50/60 p-4 rounded-lg border border-red-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-red-300 ring-4 ring-red-50/30">
+            <div class="bg-red-50/60 p-4 rounded-lg border border-red-200 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md focus-within:ring-2 focus-within:ring-red-300 ring-4 ring-red-50/30">
               <label class="input-label text-red-800 flex items-center"><i class="fas fa-box-open mr-2 text-red-600"></i>Standard Cases</label>
               <div class="relative">
                 <input type="text" inputmode="decimal" id="syrup-cases" placeholder="0" class="input-field block w-full bg-white/90 border-red-300 rounded-md py-3 text-center text-2xl font-bold text-red-700 focus:border-red-500 outline-none" oninput="calculateSyrup('cases')" onchange="handleMath(this, () => calculateSyrup('cases'))" />
@@ -183,7 +220,7 @@
             </div>
 
             <!-- Actual 1 -->
-            <div class="bg-blue-50/60 p-4 rounded-lg border border-blue-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-blue-300 relative overflow-hidden ring-4 ring-blue-50/30">
+            <div class="bg-blue-50/60 p-4 rounded-lg border border-blue-200 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md focus-within:ring-2 focus-within:ring-blue-300 relative overflow-hidden ring-4 ring-blue-50/30">
               <div class="absolute top-0 right-0 w-16 h-16 bg-blue-100 rounded-bl-full -z-10 opacity-50"></div>
               <div class="flex justify-between items-center mb-2">
                 <label class="input-label text-blue-800 mb-0 flex items-center"><i class="fas fa-boxes-packing mr-2 text-blue-600"></i>Actual Cases (A)</label>
@@ -202,7 +239,7 @@
             </div>
 
             <!-- Actual 2 -->
-            <div class="bg-indigo-50/60 p-4 rounded-lg border border-indigo-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-indigo-300 relative overflow-hidden ring-4 ring-indigo-50/30">
+            <div class="bg-indigo-50/60 p-4 rounded-lg border border-indigo-200 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md focus-within:ring-2 focus-within:ring-indigo-300 relative overflow-hidden ring-4 ring-indigo-50/30">
               <div class="absolute top-0 right-0 w-16 h-16 bg-indigo-100 rounded-bl-full -z-10 opacity-50"></div>
               <div class="flex justify-between items-center mb-2">
                 <label class="input-label text-indigo-800 mb-0 flex items-center"><i class="fas fa-boxes-packing mr-2 text-indigo-600"></i>Actual Cases (B)</label>
@@ -221,7 +258,7 @@
             </div>
 
             <!-- Actual 3 -->
-            <div class="bg-violet-50/60 p-4 rounded-lg border border-violet-200 shadow-sm transition-all focus-within:ring-2 focus-within:ring-violet-300 relative overflow-hidden ring-4 ring-violet-50/30">
+            <div class="bg-violet-50/60 p-4 rounded-lg border border-violet-200 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-md focus-within:ring-2 focus-within:ring-violet-300 relative overflow-hidden ring-4 ring-violet-50/30">
               <div class="absolute top-0 right-0 w-16 h-16 bg-violet-100 rounded-bl-full -z-10 opacity-50"></div>
               <div class="flex justify-between items-center mb-2">
                 <label class="input-label text-violet-800 mb-0 flex items-center"><i class="fas fa-boxes-packing mr-2 text-violet-600"></i>Actual Cases (C)</label>
@@ -263,12 +300,12 @@
           </div>
 
           <div class="mt-8 flex justify-end border-t border-slate-100 pt-4">
-            <button onclick="clearSyrup()" class="flex items-center text-sm text-slate-400 hover:text-red-600 transition-colors"><i class="fas fa-undo mr-2"></i> Clear Calculation</button>
+            <button onclick="clearSyrup()" class="flex items-center text-sm text-slate-400 hover:text-red-600 transition-all active:scale-95"><i class="fas fa-undo mr-2"></i> Clear Calculation</button>
           </div>
         </div>
 
         <!-- MATERIALS CONTENT -->
-        <div id="content-materials" class="p-6 sm:p-8 hidden">
+        <div id="content-materials" class="p-6 sm:p-8 tab-pane hidden">
           <div class="mb-8">
             <label class="input-label">Select Raw Material</label>
             <div class="relative">
@@ -304,12 +341,12 @@
             </div>
           </div>
           <div class="mt-8 flex justify-end border-t border-slate-100 pt-4">
-            <button onclick="clearMaterial()" class="flex items-center text-sm text-slate-400 hover:text-red-600 transition-colors"><i class="fas fa-undo mr-2"></i> Clear Calculation</button>
+            <button onclick="clearMaterial()" class="flex items-center text-sm text-slate-400 hover:text-red-600 transition-all active:scale-95"><i class="fas fa-undo mr-2"></i> Clear Calculation</button>
           </div>
         </div>
 
         <!-- DATE CODES CONTENT -->
-        <div id="content-datecode" class="p-6 sm:p-8 hidden">
+        <div id="content-datecode" class="p-6 sm:p-8 tab-pane hidden">
           <div class="bg-white/60 border border-slate-300 rounded-xl shadow-sm mb-8 overflow-hidden backdrop-blur-sm p-6">
             <div class="flex items-center gap-3 mb-6 border-b border-slate-200 pb-4">
               <h3 class="font-bold text-gray-800 text-xl"><i class="fas fa-calendar-check mr-2 text-red-600"></i> Optimum Taste Date Verification</h3>
@@ -349,10 +386,22 @@
   </div>
 </main>
 
+<!-- FLOATING ACTION BUTTON (Admin) -->
+<div class="fixed bottom-6 right-6 z-50 flex flex-col items-end space-y-2">
+  <button id="logout-btn" class="hidden w-12 h-12 bg-red-600 hover:bg-red-500 rounded-full text-white shadow-lg flex items-center justify-center transition-transform hover:scale-110 active:scale-95 group">
+    <i class="fas fa-sign-out-alt"></i>
+    <span class="absolute right-14 bg-gray-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Sign Out</span>
+  </button>
+  <button id="login-btn" class="w-14 h-14 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded-full text-red-400 shadow-[0_0_15px_rgba(0,0,0,0.5)] flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95 group">
+    <i class="fas fa-cog text-xl group-hover:rotate-90 transition-transform duration-500"></i>
+    <span class="absolute right-16 bg-gray-800 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Admin Area</span>
+  </button>
+</div>
+
 <footer class="bg-white/80 border-t border-slate-200 mt-auto backdrop-blur-sm">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
     <div class="flex flex-col md:flex-row justify-between items-center">
-      <div class="text-slate-400 text-sm mb-4 md:mb-0">&copy; 2026 Coca Cola Production calculator tool</div>
+      <div class="text-slate-400 text-sm mb-4 md:mb-0">&copy; 2026 Coca-Cola Production Calculator Tool <span class="text-xs text-slate-300 ml-1">v2.1</span></div>
       <div class="flex space-x-6 text-sm text-slate-500">
         <a href="mailto:support@releasethefizz.work" class="hover:text-red-700 transition-colors">Support</a>
       </div>
@@ -361,3 +410,5 @@
 </footer>
 
 <!-- Vite module entry point -->
+</body>
+</html>
