@@ -1,0 +1,11 @@
+{
+  "hosting": {
+    "site": "productioncalc-bbd66",
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ]
+  }
+}

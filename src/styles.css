@@ -1,0 +1,30 @@
+@tailwind base;@tailwind components;@tailwind utilities;body {font-family: 'Inter', system-ui, -apple-system, sans-serif;background-color: #f4f4f5;/* Crisp Image & Font Rendering */
+image-rendering: high-quality;
+-webkit-font-smoothing: antialiased;
+-moz-osx-font-smoothing: grayscale;
+
+/* Background base properties */
+background-size: cover;
+background-position: center;
+background-attachment: fixed;
+background-repeat: no-repeat;
+
+min-height: 100vh;
+position: relative;
+overflow-x: hidden;
+overscroll-behavior-y: none;
+-webkit-tap-highlight-color: transparent;
+
+/* ADDED: Flexbox layout to force footer to the bottom */
+display: flex;
+flex-direction: column;
+}/* --- ALTERNATING BACKGROUND CLASSES (4 IMAGES) --- */body.bg-1 {background-image:linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_2refko2refko2ref.png?alt=media&token=46599f4f-902f-4c71-a88b-7edd938a9f68');}body.bg-2 {background-image:linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_iwnuv0iwnuv0iwnu.png?alt=media&token=d62190dd-52d3-46b1-a0b0-451e137b2048');}body.bg-3 {background-image:linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_3vdpjl3vdpjl3vdp.png?alt=media&token=bd68686b-b694-43fa-8e6b-83b1a1e3e1c9');}body.bg-4 {background-image:linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_66rl4066rl4066rl.png?alt=media&token=fce96fcf-232a-40ba-be38-baa98d5732c4');}button, .nav-tab, select, input[type="date"], .glass-panel {user-select: none;-webkit-user-select: none;touch-action: manipulation;}::-webkit-scrollbar { width: 6px; height: 6px; }::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.03); }::-webkit-scrollbar-thumb { background: rgba(185, 28, 28, 0.3); border-radius: 10px; }::-webkit-scrollbar-thumb:hover { background: rgba(185, 28, 28, 0.6); }/* --- SODA FIZZ ANIMATION --- */.fizz-container {position: fixed; top: 0; left: 0; width: 100%; height: 100%;overflow: hidden; z-index: 1; pointer-events: none;}.bubble {position: absolute; bottom: -20px;background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.1) 50%, transparent 100%);border: 1.5px solid rgba(255, 255, 255, 0.6);box-shadow:inset -2px -2px 6px rgba(0, 0, 0, 0.05),inset 2px 2px 6px rgba(255, 255, 255, 0.9),0 0 8px rgba(255, 255, 255, 0.5);backdrop-filter: blur(1.5px);
+-webkit-backdrop-filter: blur(1.5px);
+
+border-radius: 50%; opacity: 0;
+left: var(--left); width: var(--size); height: var(--size);
+
+will-change: transform, opacity;
+animation: rise var(--duration) ease-in infinite;
+animation-delay: var(--delay);
+}@keyframes rise {0% { bottom: -20px; opacity: 0; transform: translate3d(0, 0, 0); }15% { opacity: 0.95; }50% { opacity: 0.7; }100% { bottom: 120vh; opacity: 0; transform: translate3d(var(--drift), 0, 0); }}.nav-tab { border-bottom: 2px solid transparent; color: #71717a; transition: all 0.2s; }.nav-tab:hover { color: #000; background-color: rgba(255, 255, 255, 0.4); }.nav-tab.active { border-bottom-color: #b91c1c; color: #b91c1c; background-color: rgba(254, 242, 242, 0.6); }.input-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 800; color: #52525b; margin-bottom: 0.5rem; display: block; }.input-field:focus { box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.1); border-color: #b91c1c; }.glass-panel {background-color: rgba(255, 255, 255, 0.80);backdrop-filter: blur(16px);-webkit-backdrop-filter: blur(16px);border: 1px solid rgba(255, 255, 255, 0.7);box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);}@media (max-width: 640px) {.text-2xl { font-size: 1.75rem !important; }.text-6xl { font-size: 4rem !important; line-height: 1; }input[type="number"], input[type="text"], select, button { min-height: 56px; font-size: 1.1rem !important; }}/* --- FIX: Force dark text on inputs and admin panels --- */input, select, textarea, #admin-panel {color: #1e293b !important;}
