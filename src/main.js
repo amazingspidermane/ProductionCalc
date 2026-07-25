@@ -4,9 +4,48 @@ import './styles.css';
 import '@fortawesome/fontawesome-free/css/fontawesome.min.css';
 import '@fortawesome/fontawesome-free/css/solid.min.css';
 import Swal from 'sweetalert2';
+// All arithmetic lives in calc.js so it can be tested without a DOM.
+import {
+  fmt,
+  parseNumericInput,
+  evaluateExpression,
+  computeSkuYields,
+  standardCasesFromLines,
+  standardCasesFromSource,
+  deriveFromStandardCases,
+  casesPerMaterialUnit,
+  materialUnitsForCases,
+  casesFromMaterialUnits,
+  unitsToPull,
+  optimumTasteDate,
+  parsePrintCode,
+  productionDateFromCode,
+  MONTHS,
+  parseMaterialList,
+  formatMaterialList,
+  buildRunPlan,
+} from './calc.js';
+import {
+  SCHEMAS,
+  toCsv,
+  parseCsv,
+  coerceRecord,
+  validateRecord,
+  significantChanges,
+  planUpsert,
+  classifyEntry,
+} from './admin-data.js';
+import {
+  STATUS,
+  statusFromSnapshot,
+  overallDataStatus,
+  describeDataStatus,
+} from './data-status.js';
 import { initializeApp } from "firebase/app";
-import { 
-  getFirestore, collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc 
+import {
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc,
+  serverTimestamp, writeBatch
 } from "firebase/firestore";
 import { 
   getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut 
@@ -31,7 +70,21 @@ if (!import.meta.env.VITE_FIREBASE_API_KEY) {
 }
 
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+
+// Persist Firestore data on the device so a plant-floor dead zone shows the
+// last real data instead of silently falling back to the built-in constants.
+// Multi-tab manager keeps several open tabs from fighting over the same cache.
+let db;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  });
+} catch (e) {
+  // Private browsing or a blocked IndexedDB — still usable, just not offline.
+  console.warn("Offline cache unavailable; continuing without it.", e?.message);
+  db = getFirestore(app);
+}
+
 const auth = getAuth(app);
 
 // --- HARDCODED DEFAULTS (FALLBACKS) ---
@@ -86,15 +139,20 @@ let MATERIAL_DB = { ...DEFAULT_MATERIALS };
 let PRODUCT_DB = { ...DEFAULT_PRODUCTS };
 let QA_CODE_DB = {};
 
-// Convert Arrays to Dictionary for initial default state
-DATE_CODE_BOTTLES.forEach(d => QA_CODE_DB[d.name] = { ...d, category: 'bottle' });
-DATE_CODE_CANS.forEach(d => QA_CODE_DB[d.name] = { ...d, category: 'can' });
+// Built-in QA codes as a dictionary, mirroring DEFAULT_MATERIALS / DEFAULT_PRODUCTS
+// so the admin panel can tell built-in entries from cloud ones.
+const DEFAULT_QACODES = {};
+DATE_CODE_BOTTLES.forEach(d => DEFAULT_QACODES[d.name] = { ...d, category: 'bottle' });
+DATE_CODE_CANS.forEach(d => DEFAULT_QACODES[d.name] = { ...d, category: 'can' });
+
+QA_CODE_DB = { ...DEFAULT_QACODES };
 
 let MATERIAL_IDS = {};
 let PRODUCT_IDS = {};
 let QA_CODE_IDS = {};
 
 let editingId = null;
+let editingName = null;   // highlights the row being edited in the admin list
 let currentActiveTab = "syrup";
 let currentAdminTab = "materials";
 let currentSkuYields = { casesPerGal: 0, casesPerPlt: 0 };
@@ -109,6 +167,7 @@ async function init() {
     initFizz();
     initNavCondense();
     initCopyButtons();
+    initAdminControls();
 
     // Safety net: Populate immediately from defaults so the app never crashes
     populateDropdowns();
@@ -121,93 +180,161 @@ async function init() {
     // Bring back whatever the user was last working on.
     restoreSession();
 
+    // Show "Loading…" up front: until a listener reports, the figures on screen
+    // are the hardcoded safety net above, not anyone's real data.
+    renderDataStatus();
+
     // LISTENER: Materials
-    onSnapshot(query(collection(db, "materials"), orderBy("name")), (snapshot) => {
-      const newDB = {}; MATERIAL_IDS = {}; 
+    listenToCollection("materials", (snapshot) => {
+      const newDB = {}; MATERIAL_IDS = {};
       if (!snapshot.empty) {
         snapshot.forEach((doc) => {
-          const data = doc.data(); newDB[data.name] = data; 
+          const data = doc.data(); newDB[data.name] = data;
           // Store an array of IDs just in case there are duplicates
           if(!MATERIAL_IDS[data.name]) MATERIAL_IDS[data.name] = [];
-          MATERIAL_IDS[data.name].push(doc.id); 
+          MATERIAL_IDS[data.name].push(doc.id);
         });
       }
-      
-      // Merge hardcoded defaults with Firestore data
-      MATERIAL_DB = { ...DEFAULT_MATERIALS, ...newDB }; 
-      
-      populateDropdowns();
-      updateMaterial(); 
-      if(currentAdminTab === 'materials') renderAdminList(); 
-    }, (error) => console.warn("Firestore access restricted, continuing with defaults.", error.message));
 
-    // LISTENER: Products 
-    onSnapshot(query(collection(db, "products"), orderBy("name")), (snapshot) => {
-      const newDB = {}; PRODUCT_IDS = {}; 
+      // Merge hardcoded defaults with Firestore data
+      MATERIAL_DB = { ...DEFAULT_MATERIALS, ...newDB };
+
+      populateDropdowns();
+      updateMaterial();
+      if(currentAdminTab === 'materials') renderAdminList();
+    });
+
+    // LISTENER: Products
+    listenToCollection("products", (snapshot) => {
+      const newDB = {}; PRODUCT_IDS = {};
       if (!snapshot.empty) {
         snapshot.forEach((doc) => {
-          const data = doc.data(); newDB[data.name] = data; 
+          const data = doc.data(); newDB[data.name] = data;
           // Store an array of IDs just in case there are duplicates
           if(!PRODUCT_IDS[data.name]) PRODUCT_IDS[data.name] = [];
-          PRODUCT_IDS[data.name].push(doc.id); 
+          PRODUCT_IDS[data.name].push(doc.id);
         });
       }
 
       // Merge hardcoded defaults with Firestore data
-      PRODUCT_DB = { ...DEFAULT_PRODUCTS, ...newDB }; 
-      
+      PRODUCT_DB = { ...DEFAULT_PRODUCTS, ...newDB };
+
       populateDropdowns();
-      updateSyrupProduct(); 
-      if(currentAdminTab === 'products') renderAdminList(); 
-    }, (error) => console.warn("Firestore access restricted, continuing with defaults.", error.message));
+      updateSyrupProduct();
+      if(currentAdminTab === 'products') renderAdminList();
+    });
 
     // LISTENER: QA Codes
-    onSnapshot(query(collection(db, "qacodes"), orderBy("name")), (snapshot) => {
-      const newDB = {}; QA_CODE_IDS = {}; 
+    listenToCollection("qacodes", (snapshot) => {
+      const newDB = {}; QA_CODE_IDS = {};
       if (!snapshot.empty) {
         snapshot.forEach((doc) => {
-          const data = doc.data(); newDB[data.name] = data; 
+          const data = doc.data(); newDB[data.name] = data;
           // Store an array of IDs just in case there are duplicates
           if(!QA_CODE_IDS[data.name]) QA_CODE_IDS[data.name] = [];
-          QA_CODE_IDS[data.name].push(doc.id); 
+          QA_CODE_IDS[data.name].push(doc.id);
         });
       }
 
-      // Rebuild base from hardcoded arrays, then append new ones from Firestore
-      QA_CODE_DB = {};
-      DATE_CODE_BOTTLES.forEach(d => QA_CODE_DB[d.name] = { ...d, category: 'bottle' });
-      DATE_CODE_CANS.forEach(d => QA_CODE_DB[d.name] = { ...d, category: 'can' });
-      QA_CODE_DB = { ...QA_CODE_DB, ...newDB };
+      // Built-in codes first, then cloud entries override by name.
+      QA_CODE_DB = { ...DEFAULT_QACODES, ...newDB };
 
       populateDateCodeDropdown();
       calculateDateCode();
       if(currentAdminTab === 'qacodes') renderAdminList();
-    }, (error) => console.warn("Firestore access restricted, continuing with defaults.", error.message));
+    });
 
   } catch (error) {
     console.error("Initialization Error:", error);
   }
 }
 
+// --- DATA FRESHNESS ---
+
+// One entry per Firestore collection the calculator reads. Everything starts
+// pending; the banner resolves once each listener has reported in.
+const dataStatuses = {
+  materials: STATUS.PENDING,
+  products:  STATUS.PENDING,
+  qacodes:   STATUS.PENDING,
+};
+
+function setDataStatus(name, status) {
+  if (dataStatuses[name] === status) return;
+  dataStatuses[name] = status;
+  renderDataStatus();
+}
+
+// Tailwind scans this file, so these class strings must be written out in full
+// rather than assembled from fragments, or they get purged from the build.
+const STATUS_STYLES = {
+  ok:      'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-100',
+  warn:    'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100',
+  error:   'border-brand-300 bg-brand-50 text-brand-900 dark:border-brand-500/40 dark:bg-brand-500/10 dark:text-brand-100',
+  pending: 'border-slate-300 bg-slate-50 text-slate-700 dark:border-white/15 dark:bg-white/5 dark:text-slate-200',
+};
+
+function renderDataStatus() {
+  const wrapper = document.getElementById('data-status');
+  if (!wrapper) return;
+
+  const view = describeDataStatus(overallDataStatus(dataStatuses), navigator.onLine);
+  wrapper.classList.toggle('hidden', !view.show);
+  if (!view.show) return;
+
+  const box = document.getElementById('data-status-box');
+  const icon = document.getElementById('data-status-icon');
+  box.className = `flex items-start gap-3 rounded-xl border px-4 py-3 shadow-card ${STATUS_STYLES[view.level]}`;
+  icon.className = `fas ${view.icon} mt-0.5 flex-shrink-0${view.icon === 'fa-spinner' ? ' fa-spin' : ''}`;
+  document.getElementById('data-status-label').textContent = view.label;
+  document.getElementById('data-status-detail').textContent = view.detail;
+}
+
+/**
+ * Subscribe to a collection, tracking how fresh its data is alongside the
+ * caller's own handling.
+ *
+ * `includeMetadataChanges` is what lets us see the cache→server handoff in the
+ * case where the server's data turns out to match what was already cached —
+ * without it the banner would sit on "Reconnecting…" indefinitely. The cost is
+ * metadata-only callbacks, which carry no document changes and would otherwise
+ * rebuild the dropdowns underneath whoever is using them, so those skip the
+ * caller entirely.
+ */
+function listenToCollection(name, apply) {
+  let applied = false;
+  return onSnapshot(
+    query(collection(db, name), orderBy("name")),
+    { includeMetadataChanges: true },
+    (snapshot) => {
+      setDataStatus(name, statusFromSnapshot({
+        fromCache: snapshot.metadata.fromCache,
+        isEmpty: snapshot.empty,
+      }));
+
+      // Metadata moved but the documents did not — nothing to re-render. The
+      // first snapshot always runs, even when empty, so the defaults land.
+      if (applied && snapshot.docChanges().length === 0) return;
+      applied = true;
+      apply(snapshot);
+    },
+    (error) => {
+      // Rules rejection, or offline with nothing cached: the screen is showing
+      // built-in constants and the operator needs to be told.
+      console.warn(`Firestore access restricted for ${name}, continuing with defaults.`, error.message);
+      setDataStatus(name, STATUS.DEFAULTS);
+    }
+  );
+}
+
+// The cached/offline wording differs, so re-render when connectivity flips.
+window.addEventListener('online', renderDataStatus);
+window.addEventListener('offline', renderDataStatus);
+
 // --- SHARED HELPERS ---
 
 const prefersReducedMotion = () =>
   window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/** Consistent number formatting: thousands separators, at most 2 decimals. */
-function fmt(num, { decimals = 2 } = {}) {
-  if (num === null || num === undefined || isNaN(num) || !isFinite(num)) return '';
-  return Number(num).toLocaleString(undefined, {
-    minimumFractionDigits: Number.isInteger(num) ? 0 : decimals,
-    maximumFractionDigits: decimals,
-  });
-}
-
-/** Strip locale formatting back to a raw number (inputs are user-editable). */
-function parseLocaleNumber(str) {
-  if (typeof str !== 'string') return parseFloat(str) || 0;
-  return parseFloat(str.replace(/,/g, '')) || 0;
-}
 
 function announce(message) {
   const region = document.getElementById('sr-status');
@@ -255,6 +382,59 @@ function initFizz() {
   }
 
   window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', render);
+}
+
+// --- ADMIN PANEL CHROME (collapse, filter, CSV) ---
+function initAdminControls() {
+    const toggle = document.getElementById('admin-toggle');
+    const body = document.getElementById('admin-body');
+    const icon = document.getElementById('admin-toggle-icon');
+
+    if (toggle && body) {
+        const setOpen = (open) => {
+            body.classList.toggle('hidden', !open);
+            toggle.setAttribute('aria-expanded', String(open));
+            if (icon) icon.style.transform = open ? 'rotate(90deg)' : '';
+            localStorage.setItem('adminPanelOpen', open ? '1' : '0');
+        };
+        // Collapsed by default — it sits above the calculator everyone uses.
+        setOpen(localStorage.getItem('adminPanelOpen') === '1');
+        toggle.addEventListener('click', () => setOpen(body.classList.contains('hidden')));
+    }
+
+    const filter = document.getElementById('admin-filter');
+    const clearBtn = document.getElementById('admin-filter-clear');
+    if (filter) {
+        filter.addEventListener('input', () => {
+            clearBtn?.classList.toggle('hidden', filter.value === '');
+            renderAdminList();
+        });
+        filter.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && filter.value) {
+                filter.value = '';
+                clearBtn?.classList.add('hidden');
+                renderAdminList();
+            }
+        });
+    }
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+            filter.value = '';
+            clearBtn.classList.add('hidden');
+            filter.focus();
+            renderAdminList();
+        });
+    }
+
+    const importBtn = document.getElementById('admin-import-btn');
+    const importFile = document.getElementById('admin-import-file');
+    if (importBtn && importFile) {
+        importBtn.addEventListener('click', () => importFile.click());
+        importFile.addEventListener('change', async () => {
+            await importAdminCsv(importFile.files[0]);
+            importFile.value = '';   // allow re-importing the same filename
+        });
+    }
 }
 
 // --- NAVBAR CONDENSE ON SCROLL ---
@@ -375,40 +555,143 @@ function buildSyrupSummary() {
 }
 
 // --- CLOUD MIGRATION TOOL ---
+const ADMIN_TAB_LABELS = { materials: 'Materials', products: 'Products', qacodes: 'QA Codes' };
+
+/**
+ * Write records to a collection, replacing entries that already share a name
+ * instead of inserting alongside them. This is what makes migrate and CSV
+ * import safe to run twice — the old version appended blindly, which is why
+ * the list had to grow a "N copies found" warning.
+ */
+async function upsertRecords(collectionName, records, idsByName) {
+    const plan = planUpsert(records, idsByName);
+    const batch = writeBatch(db);
+
+    for (const rec of plan.create) {
+        batch.set(doc(collection(db, collectionName)), withAuditStamp(rec));
+    }
+    for (const { id, data } of plan.update) {
+        batch.set(doc(db, collectionName, id), withAuditStamp(data), { merge: true });
+    }
+    // Collapse any pre-existing duplicates of the names we just wrote.
+    for (const rec of records) {
+        const extras = (idsByName[rec.name] || []).slice(1);
+        for (const id of extras) batch.delete(doc(db, collectionName, id));
+    }
+
+    await batch.commit();
+    return plan;
+}
+
 async function migrateDataToCloud() {
-  const tabNames = {
-    'materials': 'Materials',
-    'products': 'Products',
-    'qacodes': 'QA Codes'
-  };
-  const currentName = tabNames[currentAdminTab] || 'Data';
+  const ctx = adminTabContext();
+  const label = ADMIN_TAB_LABELS[currentAdminTab] || 'Data';
+  const records = Object.entries(ctx.defaults).map(([name, data]) => ({ name, ...data }));
 
   const result = await Swal.fire({
-    title: 'Migrate to Cloud?',
-    text: `This will push all default ${currentName} to the cloud. Clicking multiple times will create duplicates!`,
-    icon: 'warning',
+    title: `Sync built-in ${label} to cloud?`,
+    text: `Copies the ${records.length} built-in entries into Firestore. Existing entries with the same name are updated, not duplicated — safe to run more than once.`,
+    icon: 'question',
     showCancelButton: true,
-    confirmButtonColor: '#b91c1c',
+    confirmButtonColor: '#ba0f2c',
     cancelButtonColor: '#6b7280',
-    confirmButtonText: 'Yes, migrate it!'
+    confirmButtonText: 'Sync'
   });
   if (!result.isConfirmed) return;
-  
+
   try {
-    if (currentAdminTab === 'materials') {
-        for(const [name, data] of Object.entries(DEFAULT_MATERIALS)) { await addDoc(collection(db, "materials"), { name, ...data }); }
-    } else if (currentAdminTab === 'products') {
-        for(const [name, data] of Object.entries(DEFAULT_PRODUCTS)) { await addDoc(collection(db, "products"), { name, ...data }); }
-    } else if (currentAdminTab === 'qacodes') {
-        for(const item of DATE_CODE_BOTTLES) { await addDoc(collection(db, "qacodes"), { name: item.name, category: "bottle", weeks: item.weeks }); }
-        for(const item of DATE_CODE_CANS) { await addDoc(collection(db, "qacodes"), { name: item.name, category: "can", weeks: item.weeks }); }
-    }
-    Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `${currentName} migration complete!`, showConfirmButton: false, timer: 3000 });
+    const plan = await upsertRecords(ctx.collection, records, ctx.ids);
+    const bits = [`${plan.create.length} added`, `${plan.update.length} updated`];
+    if (plan.duplicatesCleaned) bits.push(`${plan.duplicatesCleaned} duplicates removed`);
+    toast('success', `${label}: ${bits.join(', ')}`);
   } catch (e) {
-    Swal.fire({ toast: true, position: 'top-end', icon: 'error', title: `Error migrating: ${e.message}`, showConfirmButton: false, timer: 3000 });
+    toast('error', `Error syncing: ${e.message}`);
   }
 }
 window.migrateDataToCloud = migrateDataToCloud;
+
+// --- CSV EXPORT / IMPORT ---
+
+function exportAdminCsv() {
+    const ctx = adminTabContext();
+    const columns = SCHEMAS[ctx.collection].columns;
+    const rows = Object.keys(ctx.db).sort().map(name => ({ ...ctx.db[name], name }));
+
+    const csv = toCsv(rows, columns);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `prodcalc-${ctx.collection}-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    toast('success', `Exported ${rows.length} ${ctx.collection}`);
+}
+
+async function importAdminCsv(file) {
+    if (!file) return;
+    const ctx = adminTabContext();
+
+    let records, problems;
+    try {
+        const text = await file.text();
+        const parsed = parseCsv(text);
+        if (!parsed.length) return toast('warning', 'That file has no rows');
+
+        records = [];
+        problems = [];
+        parsed.forEach((raw, i) => {
+            const data = coerceRecord(ctx.collection, raw);
+            const errors = validateRecord(ctx.collection, data);
+            if (errors.length) problems.push(`Row ${i + 2}: ${errors.join(', ')}`);
+            else records.push(data);
+        });
+    } catch (e) {
+        return toast('error', `Could not read file: ${e.message}`);
+    }
+
+    if (!records.length) {
+        return Swal.fire({
+            icon: 'error',
+            title: 'Nothing could be imported',
+            html: `<div style="text-align:left;max-height:40vh;overflow:auto">${
+                problems.slice(0, 20).map(p => escapeHtml(p)).join('<br>')}</div>`,
+            confirmButtonColor: '#ba0f2c',
+        });
+    }
+
+    const plan = planUpsert(records, ctx.ids);
+    const confirmed = await Swal.fire({
+        icon: 'question',
+        title: 'Import these changes?',
+        html: `<div style="text-align:left">
+                 <p><strong>${plan.create.length}</strong> new, <strong>${plan.update.length}</strong> updated${
+                   plan.duplicatesCleaned ? `, <strong>${plan.duplicatesCleaned}</strong> duplicates removed` : ''}.</p>
+                 ${problems.length ? `<p style="color:#b45309;margin-top:.6em"><strong>${problems.length} row(s) skipped:</strong></p>
+                   <div style="max-height:30vh;overflow:auto;font-size:.85em">${
+                     problems.slice(0, 20).map(p => escapeHtml(p)).join('<br>')}</div>` : ''}
+               </div>`,
+        showCancelButton: true,
+        confirmButtonText: 'Import',
+        confirmButtonColor: '#ba0f2c',
+        cancelButtonColor: '#6b7280',
+    });
+    if (!confirmed.isConfirmed) return;
+
+    try {
+        await upsertRecords(ctx.collection, records, ctx.ids);
+        toast('success', `Imported ${records.length} ${ctx.collection}`);
+    } catch (e) {
+        toast('error', `Import failed: ${e.message}`);
+    }
+}
+
+window.exportAdminCsv = exportAdminCsv;
 
 // --- AUTHENTICATION & ADMIN UI ---
 function setupAuthUI() {
@@ -416,17 +699,24 @@ function setupAuthUI() {
   const adminPanel = document.getElementById('admin-panel');
   const logoutBtn = document.getElementById('logout-btn');
 
+  const signedInChip = document.getElementById('admin-signed-in');
+  const emailEl = document.getElementById('admin-user-email');
+
   onAuthStateChanged(auth, (user) => {
     if (user) {
       if(loginBtn) loginBtn.classList.add('hidden');
       if(adminPanel) adminPanel.classList.remove('hidden');
       if(logoutBtn) logoutBtn.classList.remove('hidden');
-      
-      renderAdminList(); 
+
+      if(emailEl) emailEl.textContent = user.email || user.uid;
+      if(signedInChip) signedInChip.classList.remove('hidden');
+
+      renderAdminList();
     } else {
       if(loginBtn) loginBtn.classList.remove('hidden');
       if(adminPanel) adminPanel.classList.add('hidden');
       if(logoutBtn) logoutBtn.classList.add('hidden');
+      if(signedInChip) signedInChip.classList.add('hidden');
     }
   });
 
@@ -509,63 +799,135 @@ function toggleProductFields() {
     }
 }
 
-// --- ADMIN SAVING FUNCTIONS ---
-async function saveMaterial() {
-    const name = document.getElementById('new-mat-name').value;
-    const numberInput = document.getElementById('new-mat-number');
-    const number = numberInput ? numberInput.value.trim() : "";
-    const unitsPerPallet = parseFloat(document.getElementById('new-mat-units').value);
-    const unitsPerCase = parseFloat(document.getElementById('new-mat-per-case').value);
-    const desc = document.getElementById('new-mat-desc').value;
-    const category = document.getElementById('new-mat-cat').value;
-    const stdFactor = parseFloat(document.getElementById('new-mat-factor').value) || null;
+// --- ADMIN SAVING ---
 
-    if(!name || !unitsPerPallet || !unitsPerCase) return toast('warning', 'Name, units/pallet and units/case are required');
-    const materialData = { name, number, unitsPerPallet, unitsPerCase, desc: desc || name, category, stdCaseFactor: stdFactor, unitName: "Pallets" };
-
-    try {
-        if (editingId) await updateDoc(doc(db, "materials", editingId), materialData);
-        else await addDoc(collection(db, "materials"), materialData);
-        resetAdminForm();
-    } catch (e) { toast('error', 'Error saving material: ' + e.message); }
+/** Who to record against a write, for the audit stamp. */
+function currentAdminLabel() {
+    const u = auth.currentUser;
+    return u ? (u.email || u.uid) : 'unknown';
 }
 
-async function saveProduct() {
-    const name = document.getElementById('new-prod-name').value;
-    const type = document.getElementById('new-prod-type').value;
-    if(!name) return toast('warning', 'Product name is required');
+function withAuditStamp(data) {
+    return { ...data, updatedBy: currentAdminLabel(), updatedAt: serverTimestamp() };
+}
 
-    let productData = { name, type };
-    if (type === 'can') {
-        productData.galPerPallet = parseFloat(document.getElementById('new-prod-gal-plt').value) || 0;
-        productData.casesPerPallet = parseFloat(document.getElementById('new-prod-cs-plt').value) || 0;
-    } else {
-        productData.factor = parseFloat(document.getElementById('new-prod-factor').value) || 0;
+/**
+ * Shared save path for all three collections.
+ * Validates, warns on a large move in a production-critical number, then writes.
+ */
+async function saveRecord(collectionName, raw) {
+    const data = coerceRecord(collectionName, raw);
+    const errors = validateRecord(collectionName, data);
+
+    if (errors.length) {
+        await Swal.fire({
+            icon: 'warning',
+            title: "That can't be saved yet",
+            html: `<ul style="text-align:left;margin:0;padding-left:1.2em">${
+                errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul>`,
+            confirmButtonColor: '#ba0f2c',
+        });
+        return;
+    }
+
+    // A mistyped factor reaches every device on the floor instantly, so make a
+    // big change an explicit decision rather than a silent one.
+    const ctx = adminTabContext();
+    const previous = ctx.db[data.name];
+    const jumps = significantChanges(collectionName, previous, data);
+
+    if (jumps.length) {
+        const rows = jumps.map(j =>
+            `<li><strong>${escapeHtml(j.field)}</strong>: ${fmt(j.before)} → ${fmt(j.after)} (${j.pctChange}%)</li>`
+        ).join('');
+        const confirmed = await Swal.fire({
+            icon: 'warning',
+            title: 'Large change — please confirm',
+            html: `<p>This updates values every device uses immediately:</p>
+                   <ul style="text-align:left;padding-left:1.2em">${rows}</ul>`,
+            showCancelButton: true,
+            confirmButtonText: 'Yes, save it',
+            confirmButtonColor: '#ba0f2c',
+            cancelButtonColor: '#6b7280',
+        });
+        if (!confirmed.isConfirmed) return;
     }
 
     try {
-        if (editingId) await updateDoc(doc(db, "products", editingId), productData);
-        else await addDoc(collection(db, "products"), productData);
+        if (editingId) await updateDoc(doc(db, collectionName, editingId), withAuditStamp(data));
+        else await addDoc(collection(db, collectionName), withAuditStamp(data));
+        toast('success', editingId ? 'Updated' : 'Saved');
         resetAdminForm();
-    } catch (e) { toast('error', 'Error saving product: ' + e.message); }
+    } catch (e) {
+        toast('error', `Error saving: ${e.message}`);
+    }
+}
+
+async function saveMaterial() {
+    const name = document.getElementById('new-mat-name').value.trim();
+    await saveRecord('materials', {
+        name,
+        number: document.getElementById('new-mat-number')?.value,
+        unitsPerPallet: document.getElementById('new-mat-units').value,
+        unitsPerCase: document.getElementById('new-mat-per-case').value,
+        desc: document.getElementById('new-mat-desc').value || name,
+        category: document.getElementById('new-mat-cat').value,
+        stdCaseFactor: document.getElementById('new-mat-factor').value,
+        unitName: 'Pallets',
+    });
+}
+
+async function saveProduct() {
+    const type = document.getElementById('new-prod-type').value;
+    await saveRecord('products', {
+        name: document.getElementById('new-prod-name').value,
+        type,
+        // Only send the fields that apply, so a blank irrelevant field can't be
+        // coerced to 0 and poison the maths.
+        galPerPallet: type === 'can' ? document.getElementById('new-prod-gal-plt').value : '',
+        casesPerPallet: type === 'can' ? document.getElementById('new-prod-cs-plt').value : '',
+        factor: type === 'bottle' ? document.getElementById('new-prod-factor').value : '',
+        materials: formatMaterialList(selectedProductMaterials()),
+    });
+}
+
+/** Names picked in the admin product form's multi-select. */
+function selectedProductMaterials() {
+    const sel = document.getElementById('new-prod-materials');
+    if (!sel) return [];
+    return Array.from(sel.selectedOptions).map((o) => o.value);
+}
+
+/** Refill the admin product form's material list, keeping the current picks. */
+function fillProductMaterialsField(selected) {
+    const sel = document.getElementById('new-prod-materials');
+    if (!sel) return;
+
+    const chosen = new Set(selected || selectedProductMaterials());
+    sel.innerHTML = '';
+    Object.keys(MATERIAL_DB).sort().forEach((name) => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.innerText = MATERIAL_DB[name].number ? `[${MATERIAL_DB[name].number}] ${name}` : name;
+        opt.selected = chosen.has(name);
+        sel.appendChild(opt);
+    });
 }
 
 async function saveQACode() {
-    const name = document.getElementById('new-qa-name').value;
-    const category = document.getElementById('new-qa-cat').value;
-    const weeks = parseInt(document.getElementById('new-qa-weeks').value) || 0;
-    if(!name || !weeks) return toast('warning', 'Name and weeks are required');
-
-    try {
-        if (editingId) await updateDoc(doc(db, "qacodes", editingId), { name, category, weeks });
-        else await addDoc(collection(db, "qacodes"), { name, category, weeks });
-        resetAdminForm();
-    } catch (e) { toast('error', 'Error saving QA code: ' + e.message); }
+    await saveRecord('qacodes', {
+        name: document.getElementById('new-qa-name').value,
+        category: document.getElementById('new-qa-cat').value,
+        weeks: document.getElementById('new-qa-weeks').value,
+    });
 }
 
 function resetAdminForm() {
     document.querySelectorAll('.admin-form input').forEach(el => el.value = "");
+    fillProductMaterialsField([]);   // multi-select isn't cleared by .value = ""
+    const wasEditing = editingName;
     editingId = null;
+    editingName = null;
 
     ['material', 'product', 'qacode'].forEach(type => {
         const btn = document.getElementById(`btn-save-${type}`);
@@ -577,135 +939,222 @@ function resetAdminForm() {
 
     document.querySelectorAll('.cancel-edit-btn').forEach(btn => btn.remove());
     toggleProductFields();
+    if (wasEditing) renderAdminList();  // clear the row highlight
+}
+
+/** Everything the admin UI needs to know about the tab currently open. */
+function adminTabContext() {
+    const strong = 'text-slate-900 dark:text-slate-100';
+    const meta = 'text-xs ml-1 whitespace-nowrap text-slate-500 dark:text-slate-400';
+
+    if (currentAdminTab === 'products') {
+        return {
+            collection: 'products', db: PRODUCT_DB, ids: PRODUCT_IDS, defaults: DEFAULT_PRODUCTS,
+            display: (i) => `<strong class="${strong}">${escapeHtml(i.name)}</strong> <span class="${meta}">(${escapeHtml(String(i.type || '').toUpperCase())})</span>`,
+        };
+    }
+    if (currentAdminTab === 'qacodes') {
+        return {
+            collection: 'qacodes', db: QA_CODE_DB, ids: QA_CODE_IDS, defaults: DEFAULT_QACODES,
+            display: (i) => `<strong class="${strong}">${escapeHtml(i.name)}</strong> <span class="${meta}">(${i.weeks} wks, ${escapeHtml(i.category)})</span>`,
+        };
+    }
+    return {
+        collection: 'materials', db: MATERIAL_DB, ids: MATERIAL_IDS, defaults: DEFAULT_MATERIALS,
+        display: (i) => `<strong class="${strong}">${i.number ? `[${escapeHtml(i.number)}] ` : ''}${escapeHtml(i.name)}</strong> <span class="${meta}">(${i.unitsPerPallet}/plt)</span>`,
+    };
+}
+
+/** "2 hours ago" style stamp from a Firestore timestamp. */
+function relativeTime(ts) {
+    if (!ts) return '';
+    const then = typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts);
+    if (isNaN(then.getTime())) return '';
+    const secs = Math.round((Date.now() - then.getTime()) / 1000);
+    if (secs < 60) return 'just now';
+    const mins = Math.round(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.round(hrs / 24)}d ago`;
 }
 
 function renderAdminList() {
     const listContainer = document.getElementById('admin-database-list');
     if (!listContainer) return;
-    listContainer.innerHTML = "";
 
-    let dbObj, idObj, displayFunc;
+    // Firestore snapshots re-render this list; without this the scroll position
+    // jumps back to the top mid-task.
+    const scrollTop = listContainer.scrollTop;
 
-    const strong = 'text-slate-900 dark:text-slate-100';
-    const meta = 'text-xs ml-1 whitespace-nowrap text-slate-500 dark:text-slate-400';
+    const ctx = adminTabContext();
+    const filter = (document.getElementById('admin-filter')?.value || '').trim().toLowerCase();
 
-    if (currentAdminTab === 'materials') {
-        dbObj = MATERIAL_DB; idObj = MATERIAL_IDS;
-        displayFunc = (item) => `<strong class="${strong}">${item.number ? `[${item.number}] ` : ''}${item.name}</strong> <span class="${meta}">(${item.unitsPerPallet}/plt)</span>`;
-    } else if (currentAdminTab === 'products') {
-        dbObj = PRODUCT_DB; idObj = PRODUCT_IDS;
-        displayFunc = (item) => `<strong class="${strong}">${item.name}</strong> <span class="${meta}">(${item.type.toUpperCase()})</span>`;
-    } else if (currentAdminTab === 'qacodes') {
-        dbObj = QA_CODE_DB; idObj = QA_CODE_IDS;
-        displayFunc = (item) => `<strong class="${strong}">${item.name}</strong> <span class="${meta}">(${item.weeks} wks, ${item.category})</span>`;
+    // Show everything the calculator can actually use — built-in entries as well
+    // as cloud ones. Previously only cloud docs were listed, so a built-in
+    // material was invisible here and could never be edited.
+    const names = Object.keys(ctx.db)
+        .filter(n => !filter || n.toLowerCase().includes(filter))
+        .sort();
+
+    const countEl = document.getElementById('admin-list-count');
+    if (countEl) {
+        const total = Object.keys(ctx.db).length;
+        countEl.textContent = filter ? `${names.length} of ${total}` : `${total} item${total === 1 ? '' : 's'}`;
     }
 
-    const items = Object.keys(idObj).sort();
-    if (items.length === 0) return listContainer.innerHTML = '<div class="text-sm italic p-2 text-slate-500 dark:text-slate-400">No custom items in database yet. Try Migrating!</div>';
+    listContainer.innerHTML = "";
 
-    items.forEach(name => {
-        const item = dbObj[name];
-        const docIds = idObj[name];
-        if(!item || !docIds) return;
+    if (names.length === 0) {
+        listContainer.innerHTML = filter
+            ? `<div class="text-sm italic p-3 text-slate-500 dark:text-slate-400">No matches for “${escapeHtml(filter)}”.</div>`
+            : '<div class="text-sm italic p-3 text-slate-500 dark:text-slate-400">Nothing here yet. Add an item using the form.</div>';
+        return;
+    }
 
-        const primaryId = docIds[0];
+    names.forEach(name => {
+        const item = ctx.db[name];
+        if (!item) return;
+
+        const { docIds, isCloud, overridesBuiltIn, duplicateCount, primaryId } =
+            classifyEntry(name, ctx.ids, ctx.defaults);
+        const isEditing = editingName === name;
+
+        const badge = isCloud
+            ? `<span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-800">Cloud</span>`
+            : `<span class="text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600">Built-in</span>`;
+
+        const overridden = overridesBuiltIn
+            ? `<span class="text-[10px] text-slate-400 dark:text-slate-500">overrides built-in</span>` : '';
+
+        const audit = item.updatedBy
+            ? `<div class="text-[11px] mt-1 text-slate-400 dark:text-slate-500">edited by ${escapeHtml(item.updatedBy)}${item.updatedAt ? ' · ' + relativeTime(item.updatedAt) : ''}</div>`
+            : '';
+
+        const dupes = duplicateCount > 0
+            ? `<div class="text-xs font-bold mt-1 px-2 py-0.5 rounded inline-block text-brand-700 bg-brand-100 dark:text-brand-300 dark:bg-brand-500/15"><i class="fas fa-exclamation-triangle"></i> ${docIds.length} copies — delete clears all</div>` : '';
 
         const div = document.createElement('div');
-        div.className = "flex justify-between items-start p-2 mb-2 rounded-lg border text-sm w-full bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700";
+        div.className = "admin-row flex justify-between items-start p-2 mb-2 rounded-lg border text-sm w-full transition-colors "
+            + (isEditing
+                ? "bg-amber-50 border-amber-300 dark:bg-amber-500/10 dark:border-amber-600"
+                : "bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700");
+        div.dataset.name = name;
         div.innerHTML = `
             <div class="flex-1 min-w-0 pr-2">
-                <div class="whitespace-normal break-words leading-snug">${displayFunc(item)}</div>
-                ${docIds.length > 1 ? `<div class="text-xs font-bold mt-1 px-2 py-0.5 rounded inline-block text-brand-700 bg-brand-100 dark:text-brand-300 dark:bg-brand-500/15"><i class="fas fa-exclamation-triangle"></i> ${docIds.length} Copies Found (Delete to clear all)</div>` : ''}
+                <div class="flex items-center gap-2 flex-wrap mb-0.5">${badge}${overridden}</div>
+                <div class="whitespace-normal break-words leading-snug">${ctx.display(item)}</div>
+                ${audit}${dupes}
             </div>
-            <div class="flex gap-2 flex-shrink-0">
-                <button type="button" aria-label="Edit" class="p-2 rounded transition-colors edit-btn text-blue-500 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-500/15" data-id="${primaryId}" data-name="${name.replace(/"/g, '&quot;')}"><i class="fas fa-edit"></i></button>
-                <button type="button" aria-label="Delete" class="p-2 rounded transition-colors delete-btn text-brand-500 hover:text-brand-700 hover:bg-brand-50 dark:hover:bg-brand-500/15" data-ids='${JSON.stringify(docIds)}'><i class="fas fa-trash-alt"></i></button>
+            <div class="flex gap-1 flex-shrink-0">
+                <button type="button" aria-label="Edit ${escapeHtml(name)}" class="p-2 rounded transition-colors edit-btn text-blue-500 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-500/15" data-name="${escapeHtml(name)}" data-id="${primaryId || ''}"><i class="fas fa-edit"></i></button>
+                ${isCloud
+                    ? `<button type="button" aria-label="Delete ${escapeHtml(name)}" class="p-2 rounded transition-colors delete-btn text-brand-500 hover:text-brand-700 hover:bg-brand-50 dark:hover:bg-brand-500/15" data-ids='${JSON.stringify(docIds)}'><i class="fas fa-trash-alt"></i></button>`
+                    : `<span class="p-2 text-slate-300 dark:text-slate-600" title="Built-in entries live in the app code and can't be deleted"><i class="fas fa-lock"></i></span>`}
             </div>`;
         listContainer.appendChild(div);
     });
 
-    document.querySelectorAll('.delete-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            const button = e.target.closest('button');
-            const ids = JSON.parse(button.dataset.ids);
-            
-            const result = await Swal.fire({
-                title: 'Delete from Cloud?',
-                text: "Are you sure you want to delete this?",
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonColor: '#b91c1c',
-                cancelButtonColor: '#6b7280',
-                confirmButtonText: 'Yes, delete it!'
-            });
-            
-            if(result.isConfirmed) {
-                const colName = { products: 'products', qacodes: 'qacodes' }[currentAdminTab] || 'materials';
-                try {
-                    // Delete ALL duplicates of this item at the exact same time
-                    for(const id of ids) {
-                        await deleteDoc(doc(db, colName, id));
-                        if (editingId === id) resetAdminForm();
-                    }
-                    Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Deleted successfully', showConfirmButton: false, timer: 2000 });
-                } catch(err) {
-                    Swal.fire({ toast: true, position: 'top-end', icon: 'error', title: 'Error deleting', text: err.message, showConfirmButton: false, timer: 3000 });
-                }
-            }
-        });
+    listContainer.scrollTop = scrollTop;
+
+    listContainer.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => handleAdminDelete(JSON.parse(btn.dataset.ids)));
     });
 
-    document.querySelectorAll('.edit-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const button = e.target.closest('button');
-            const name = button.dataset.name;
-            const item = dbObj[name];
-            editingId = button.dataset.id;
-
-            let saveBtnId = '';
-            
-            if(currentAdminTab === 'materials') {
-                document.getElementById('new-mat-name').value = item.name;
-                const numInput = document.getElementById('new-mat-number');
-                if(numInput) numInput.value = item.number || "";
-                document.getElementById('new-mat-units').value = item.unitsPerPallet;
-                document.getElementById('new-mat-per-case').value = item.unitsPerCase;
-                document.getElementById('new-mat-desc').value = item.desc || "";
-                document.getElementById('new-mat-cat').value = item.category;
-                document.getElementById('new-mat-factor').value = item.stdCaseFactor || "";
-                saveBtnId = 'btn-save-material';
-            } else if (currentAdminTab === 'products') {
-                document.getElementById('new-prod-name').value = item.name;
-                document.getElementById('new-prod-type').value = item.type;
-                toggleProductFields();
-                if(item.type === 'can') {
-                    document.getElementById('new-prod-gal-plt').value = item.galPerPallet;
-                    document.getElementById('new-prod-cs-plt').value = item.casesPerPallet;
-                } else {
-                    document.getElementById('new-prod-factor').value = item.factor;
-                }
-                saveBtnId = 'btn-save-product';
-            } else if (currentAdminTab === 'qacodes') {
-                document.getElementById('new-qa-name').value = item.name;
-                document.getElementById('new-qa-cat').value = item.category;
-                document.getElementById('new-qa-weeks').value = item.weeks;
-                saveBtnId = 'btn-save-qacode';
-            }
-
-            const saveBtn = document.getElementById(saveBtnId);
-            saveBtn.innerText = "Update";
-            saveBtn.classList.add('!bg-amber-600', 'hover:!bg-amber-700');
-
-            if (!saveBtn.nextElementSibling?.classList.contains('cancel-edit-btn')) {
-                const cancelBtn = document.createElement('button');
-                cancelBtn.type = "button";
-                cancelBtn.innerText = "Cancel";
-                cancelBtn.className = "cancel-edit-btn mt-2 w-full px-4 py-2 rounded-lg font-bold text-white transition-colors bg-slate-500 hover:bg-slate-600";
-                cancelBtn.addEventListener('click', resetAdminForm);
-                saveBtn.parentNode.insertBefore(cancelBtn, saveBtn.nextSibling);
-            }
-        });
+    listContainer.querySelectorAll('.edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => beginAdminEdit(btn.dataset.name, btn.dataset.id || null));
     });
+}
+
+async function handleAdminDelete(ids) {
+    const result = await Swal.fire({
+        title: 'Delete from cloud?',
+        text: ids.length > 1
+            ? `This removes all ${ids.length} copies of this entry.`
+            : 'This removes the entry from the cloud database.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#ba0f2c',
+        cancelButtonColor: '#6b7280',
+        confirmButtonText: 'Yes, delete it'
+    });
+    if (!result.isConfirmed) return;
+
+    const colName = adminTabContext().collection;
+    try {
+        for (const id of ids) {
+            await deleteDoc(doc(db, colName, id));
+            if (editingId === id) resetAdminForm();
+        }
+        toast('success', 'Deleted');
+    } catch (err) {
+        toast('error', 'Error deleting: ' + err.message);
+    }
+}
+
+/**
+ * Load an entry into the form.
+ * Built-in entries have no document id — saving one creates a cloud override
+ * rather than failing silently.
+ */
+function beginAdminEdit(name, docId) {
+    const ctx = adminTabContext();
+    const item = ctx.db[name];
+    if (!item) return;
+
+    editingId = docId || null;
+    editingName = name;
+
+    let saveBtnId = '';
+
+    if (currentAdminTab === 'materials') {
+        document.getElementById('new-mat-name').value = item.name || name;
+        const numInput = document.getElementById('new-mat-number');
+        if (numInput) numInput.value = item.number || "";
+        document.getElementById('new-mat-units').value = item.unitsPerPallet ?? "";
+        document.getElementById('new-mat-per-case').value = item.unitsPerCase ?? "";
+        document.getElementById('new-mat-desc').value = item.desc || "";
+        document.getElementById('new-mat-cat').value = item.category || 'can';
+        document.getElementById('new-mat-factor').value = item.stdCaseFactor || "";
+        saveBtnId = 'btn-save-material';
+    } else if (currentAdminTab === 'products') {
+        document.getElementById('new-prod-name').value = item.name || name;
+        document.getElementById('new-prod-type').value = item.type || 'can';
+        toggleProductFields();
+        if (item.type === 'can') {
+            document.getElementById('new-prod-gal-plt').value = item.galPerPallet ?? "";
+            document.getElementById('new-prod-cs-plt').value = item.casesPerPallet ?? "";
+        } else {
+            document.getElementById('new-prod-factor').value = item.factor ?? "";
+        }
+        fillProductMaterialsField(parseMaterialList(item.materials));
+        saveBtnId = 'btn-save-product';
+    } else {
+        document.getElementById('new-qa-name').value = item.name || name;
+        document.getElementById('new-qa-cat').value = item.category || 'can';
+        document.getElementById('new-qa-weeks').value = item.weeks ?? "";
+        saveBtnId = 'btn-save-qacode';
+    }
+
+    const saveBtn = document.getElementById(saveBtnId);
+    saveBtn.innerText = editingId ? "Update" : "Save as cloud override";
+    saveBtn.classList.add('!bg-amber-600', 'hover:!bg-amber-700');
+
+    if (!saveBtn.nextElementSibling?.classList.contains('cancel-edit-btn')) {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = "button";
+        cancelBtn.innerText = "Cancel";
+        cancelBtn.className = "cancel-edit-btn mt-2 w-full px-4 py-2 rounded-lg font-bold text-white transition-colors bg-slate-500 hover:bg-slate-600";
+        cancelBtn.addEventListener('click', resetAdminForm);
+        saveBtn.parentNode.insertBefore(cancelBtn, saveBtn.nextSibling);
+    }
+
+    renderAdminList();  // highlight the row being edited
+
+    // On a phone the form sits above the list, so without this the tap looks
+    // like it did nothing at all.
+    document.getElementById(`admin-form-${currentAdminTab}`)
+        ?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
 }
 
 // --- CORE APP LOGIC ---
@@ -919,7 +1368,8 @@ const SESSION_FIELDS = [
   'syrup-actual-cases-1', 'syrup-actual-cases-2', 'syrup-actual-cases-3',
   'syrup-pack-size-1', 'syrup-pack-size-2', 'syrup-pack-size-3',
   'mat-select', 'mat-target', 'mat-onhand',
-  'datecode-product',
+  'run-product',   // the pack rows persist separately, under RUN_LINES_KEY
+  'datecode-product', 'lookup-code', 'lookup-product',
 ];
 
 let sessionRestored = false;
@@ -945,7 +1395,7 @@ function restoreSession() {
 
   if (data) {
     // Selects first, so the dependent calculations see the right SKU.
-    ['syrup-product', 'mat-select', 'datecode-product',
+    ['syrup-product', 'mat-select', 'run-product', 'datecode-product', 'lookup-product',
      'syrup-pack-size-1', 'syrup-pack-size-2', 'syrup-pack-size-3'].forEach((id) => {
       const el = document.getElementById(id);
       if (el && data[id] != null && Array.from(el.options).some((o) => o.value === data[id])) {
@@ -954,7 +1404,8 @@ function restoreSession() {
     });
 
     ['syrup-gals', 'syrup-plts', 'syrup-cases', 'syrup-actual-cases-1',
-     'syrup-actual-cases-2', 'syrup-actual-cases-3', 'mat-target', 'mat-onhand'].forEach((id) => {
+     'syrup-actual-cases-2', 'syrup-actual-cases-3', 'mat-target', 'mat-onhand',
+     'lookup-code'].forEach((id) => {
       const el = document.getElementById(id);
       if (el && data[id] != null) el.value = data[id];
     });
@@ -962,7 +1413,9 @@ function restoreSession() {
     syncComboboxes();
     updateSyrupProduct();
     updateMaterial();
+    updateRunProduct();
     calculateDateCode();
+    lookupPrintCode();
 
     if (data.tab && data.tab !== 'syrup') switchTab(data.tab);
   }
@@ -990,32 +1443,42 @@ function createBubble(container) {
   container.appendChild(bubble);
 }
 
+/** Fill a product select with the can/bottle optgroups, preserving the choice. */
+function fillProductSelect(select) {
+  if (!select) return;
+  const current = select.value;
+
+  select.innerHTML = '<option value="" disabled selected hidden>Select a Product...</option>';
+  const canGroup = document.createElement("optgroup"); canGroup.label = "Cans"; canGroup.className = "text-red-800 font-bold bg-red-50";
+  const bottleGroup = document.createElement("optgroup"); bottleGroup.label = "Bottles"; bottleGroup.className = "text-gray-800 font-bold bg-slate-50";
+  Object.keys(PRODUCT_DB).sort().forEach((key) => {
+    let opt = document.createElement("option"); opt.value = key; opt.innerText = key; opt.className = "text-gray-700 bg-white font-normal";
+    if (PRODUCT_DB[key].type === "bottle") bottleGroup.appendChild(opt); else canGroup.appendChild(opt);
+  });
+  select.appendChild(canGroup); select.appendChild(bottleGroup);
+
+  if (current && PRODUCT_DB[current]) {
+    select.value = current;
+  } else if (PRODUCT_DB["12 oz. Can"]) {
+    select.value = "12 oz. Can";
+  }
+}
+
 function populateDropdowns() {
   const syrupSelect = document.getElementById("syrup-product");
+  const runSelect = document.getElementById("run-product");
   const matSelect = document.getElementById("mat-select");
 
-  const currentSyrup = syrupSelect ? syrupSelect.value : null;
   const currentMat = matSelect ? matSelect.value : null;
 
   if(syrupSelect) {
-    syrupSelect.innerHTML = '<option value="" disabled selected hidden>Select a Product...</option>';
-    const canGroup = document.createElement("optgroup"); canGroup.label = "Cans"; canGroup.className = "text-red-800 font-bold bg-red-50";
-    const bottleGroup = document.createElement("optgroup"); bottleGroup.label = "Bottles"; bottleGroup.className = "text-gray-800 font-bold bg-slate-50";
-    Object.keys(PRODUCT_DB).sort().forEach((key) => {
-      let opt = document.createElement("option"); opt.value = key; opt.innerText = key; opt.className = "text-gray-700 bg-white font-normal";
-      if (PRODUCT_DB[key].type === "bottle") bottleGroup.appendChild(opt); else canGroup.appendChild(opt);
-    });
-    syrupSelect.appendChild(canGroup); syrupSelect.appendChild(bottleGroup);
+    fillProductSelect(syrupSelect);
+    if (syrupSelect.value) updateSyrupProduct();
+  }
 
-    if (currentSyrup && PRODUCT_DB[currentSyrup]) {
-        syrupSelect.value = currentSyrup;
-    } else if (PRODUCT_DB["12 oz. Can"]) {
-        syrupSelect.value = "12 oz. Can";
-    }
-
-    if (syrupSelect.value) {
-        updateSyrupProduct();
-    }
+  if(runSelect) {
+    fillProductSelect(runSelect);
+    if (runSelect.value) updateRunProduct();
   }
 
   if(matSelect) {
@@ -1033,13 +1496,23 @@ function populateDropdowns() {
       if (currentMat && MATERIAL_DB[currentMat]) matSelect.value = currentMat;
   }
 
+  // The admin product form lists materials too, so it follows the same data.
+  fillProductMaterialsField();
+
   syncComboboxes();
 }
 
 function populateDateCodeDropdown() {
-  const select = document.getElementById("datecode-product");
+  // Both the forward calculator and the reverse lookup pick a category the same
+  // way, so they share one list.
+  ["datecode-product", "lookup-product"].forEach(fillDateCodeSelect);
+  syncComboboxes();
+}
+
+function fillDateCodeSelect(selectId) {
+  const select = document.getElementById(selectId);
   if (!select) return;
-  
+
   const currentVal = select.value;
 
   select.innerHTML = '<option value="">Select a Product Category...</option>';
@@ -1065,8 +1538,6 @@ function populateDateCodeDropdown() {
      const exists = Object.values(QA_CODE_DB).some(item => item.weeks.toString() === currentVal);
      if (exists) select.value = currentVal;
   }
-
-  syncComboboxes();
 }
 
 function calculateDateCode() {
@@ -1077,29 +1548,92 @@ function calculateDateCode() {
   
   if (!productSelect || !dateInput) return;
 
-  const weeks = parseInt(productSelect.value);
-  const prodDateStr = dateInput.value;
-  
-  if (!weeks || isNaN(weeks) || !prodDateStr) {
+  const result = optimumTasteDate(dateInput.value, parseInt(productSelect.value));
+
+  if (!result) {
       if(resultEl) resultEl.innerText = "---";
       if(printEl) printEl.innerText = "---";
       return;
   }
 
-  const prodDate = new Date(prodDateStr + 'T12:00:00');
-  const dayOfWeek = prodDate.getDay(); 
-  const daysToSubtract = (dayOfWeek + 6) % 7; 
-  const mondayProdDate = new Date(prodDate.getTime() - (daysToSubtract * 24 * 60 * 60 * 1000));
-  const expDate = new Date(mondayProdDate.getTime() + (weeks * 7 * 24 * 60 * 60 * 1000));
-  
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const m = months[expDate.getMonth()];
-  const d = String(expDate.getDate()).padStart(2, '0');
-  const y = String(expDate.getFullYear()).slice(-2);
-  
-  if(resultEl) resultEl.innerText = `${m}-${d}-${y}`;
-  const dayLetters = ["G", "A", "B", "C", "D", "E", "F"]; 
-  if (printEl) printEl.innerText = `BB${m.toUpperCase()}${d}${y}DD${dayLetters[dayOfWeek]}`;
+  if (resultEl) resultEl.innerText = result.display;
+  if (printEl) printEl.innerText = result.printCode;
+}
+
+/**
+ * Reverse lookup: a code off a can, back to the day it was made.
+ *
+ * The code carries the expiry and the production weekday but not the shelf
+ * life, so a category is needed to pin the date. Without one we show every
+ * distinct shelf life on file and let the operator recognise theirs, which
+ * beats refusing to answer when someone is holding an unlabelled can.
+ */
+function lookupPrintCode() {
+  const codeEl = document.getElementById("lookup-code");
+  const out = document.getElementById("lookup-result");
+  if (!codeEl || !out) return;
+
+  const raw = codeEl.value.trim();
+  const weeks = parseInt(document.getElementById("lookup-product")?.value) || 0;
+
+  if (!raw) {
+    out.innerHTML = '<p class="text-sm text-slate-500 dark:text-slate-400">Enter a print code to decode it.</p>';
+    return;
+  }
+
+  const parsed = parsePrintCode(raw);
+  if (!parsed) {
+    out.innerHTML = `<p class="text-sm font-bold text-amber-700 dark:text-amber-300"><i class="fas fa-triangle-exclamation mr-2" aria-hidden="true"></i>Not a code we recognise.</p>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">Expected the shape <span class="font-mono">BBJUN0126DDC</span> — month, day, year, then the production day letter.</p>`;
+    return;
+  }
+
+  const expiryText = `${MONTHS[parsed.expiry.getMonth()]}-${String(parsed.expiry.getDate()).padStart(2, '0')}-${String(parsed.expiry.getFullYear()).slice(-2)}`;
+
+  const header = `<div class="text-center">
+      <span class="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Best Before</span>
+      <p class="tnum text-2xl font-extrabold text-slate-800 dark:text-slate-100">${escapeHtml(expiryText)}</p>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Produced on a <strong>${escapeHtml(parsed.dayName)}</strong></p>
+    </div>`;
+
+  if (!weeks) {
+    // No category chosen — offer one row per distinct shelf life on file.
+    const weeksOnFile = [...new Set(Object.values(QA_CODE_DB).map((c) => Number(c.weeks)))]
+      .filter((w) => w > 0)
+      .sort((a, b) => a - b);
+
+    const rows = weeksOnFile.map((w) => {
+      const r = productionDateFromCode(raw, w);
+      return `<div class="flex items-baseline justify-between gap-3 py-1.5 border-b border-slate-200/70 dark:border-slate-700/70 last:border-0">
+        <span class="text-xs text-slate-500 dark:text-slate-400">${w} weeks</span>
+        <span class="tnum text-sm font-bold text-slate-800 dark:text-slate-100">${escapeHtml(r.display)}</span>
+      </div>`;
+    }).join('');
+
+    out.innerHTML = `${header}
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-4 mb-1">Pick a category for the exact date, or match a shelf life:</p>
+      <div class="mt-1">${rows}</div>`;
+    return;
+  }
+
+  const r = productionDateFromCode(raw, weeks);
+  const weekEnd = new Date(r.weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
+  const fmtShort = (d) => `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+
+  // A code we printed always expires on a Monday; anything else is worth saying.
+  const warn = r.weekAligned ? '' : `<p class="text-xs text-amber-700 dark:text-amber-300 mt-3">
+      <i class="fas fa-triangle-exclamation mr-1" aria-hidden="true"></i>This code doesn't expire on a Monday, so it wasn't printed by this plant's system. Treat the date below as a best guess.</p>`;
+
+  out.innerHTML = `${header}
+    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 text-center">
+      <span class="text-xs font-bold uppercase tracking-wide text-brand-800 dark:text-brand-300">Produced</span>
+      <p id="lookup-proddate" class="tnum text-4xl font-extrabold text-brand-700 dark:text-brand-400 tracking-tight">${escapeHtml(r.display)}</p>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${escapeHtml(r.dayName)} · week of ${escapeHtml(fmtShort(r.weekStart))}–${escapeHtml(fmtShort(weekEnd))} · ${r.weeks} week shelf life</p>
+      ${warn}
+      <div class="flex items-center justify-center gap-2 mt-4">
+        <button type="button" class="copy-btn" data-copy-from="lookup-proddate" data-copy-label="Production date"><i class="fas fa-copy" aria-hidden="true"></i><span>Copy date</span></button>
+      </div>
+    </div>`;
 }
 
 function switchTab(tab) {
@@ -1136,8 +1670,7 @@ function updateSyrupProduct() {
     return;
   }
 
-  currentSkuYields.casesPerGal = product.type === "bottle" ? product.factor : product.casesPerPallet / product.galPerPallet;
-  currentSkuYields.casesPerPlt = product.type === "bottle" ? 0 : product.casesPerPallet;
+  currentSkuYields = computeSkuYields(product);
 
   // Re-derive the other fields for the new SKU. If per-line counts exist (a
   // restored session, or a live Firestore update), recompute *from* them —
@@ -1209,61 +1742,37 @@ function calculateSyrup(source) {
   else if (source === 'actual-2') sourceEl = actual2El;
   else if (source === 'actual-3') sourceEl = actual3El;
 
-  let valStr = sourceEl ? sourceEl.value.trim() : "";
-  let val = 0;
-
-  if (!source.startsWith('packsize') && valStr.startsWith("=")) {
-    try {
-        val = new Function("return " + valStr.substring(1).replace(/[^0-9+\-*/(). ]/g, ""))();
-    } catch(e) {
-        val = 0;
-    }
-  } else if (!source.startsWith('packsize')) {
-    val = parseLocaleNumber(valStr);
-  }
+  const valStr = sourceEl ? sourceEl.value.trim() : "";
+  const val = source.startsWith('packsize') ? 0 : parseNumericInput(valStr);
 
   let stdCases = 0;
   let gals = 0;
   let plts = 0;
 
-  let act1 = source === 'actual-1' ? val : parseLocaleNumber(actual1El?.value || '');
-  let act2 = source === 'actual-2' ? val : parseLocaleNumber(actual2El?.value || '');
-  let act3 = source === 'actual-3' ? val : parseLocaleNumber(actual3El?.value || '');
+  const act1 = source === 'actual-1' ? val : parseNumericInput(actual1El?.value || '');
+  const act2 = source === 'actual-2' ? val : parseNumericInput(actual2El?.value || '');
+  const act3 = source === 'actual-3' ? val : parseNumericInput(actual3El?.value || '');
 
   // Blank rather than "0" for empty results, and thousands separators everywhere.
   const formatNum = (num) => (!num || isNaN(num) || !isFinite(num)) ? '' : fmt(num);
 
   // IF TYPING IN ACTUAL CASES (A, B, or C) - SUM THEM TOGETHER
   if (source.startsWith('actual') || source.startsWith('packsize')) {
-      stdCases = (act1 * pack1 / 24) + (act2 * pack2 / 24) + (act3 * pack3 / 24);
-      
-      if (product.type === "bottle") {
-          gals = stdCases / product.factor;
-      } else {
-          gals = stdCases / currentSkuYields.casesPerGal;
-          plts = stdCases / currentSkuYields.casesPerPlt;
-      }
+      stdCases = standardCasesFromLines([
+        { count: act1, packSize: pack1 },
+        { count: act2, packSize: pack2 },
+        { count: act3, packSize: pack3 },
+      ]);
+      ({ gals, plts } = deriveFromStandardCases(product, currentSkuYields, stdCases));
 
       if (galsEl) galsEl.value = formatNum(gals);
       if (pltsEl && product.type !== 'bottle') pltsEl.value = formatNum(plts);
       if (casesEl) casesEl.value = formatNum(stdCases);
-  } 
+  }
   // IF TYPING IN THE TOP ROW - CASCADE DOWN
   else {
-      if (source === 'gals') {
-          stdCases = (product.type === "bottle") ? (val * product.factor) : (val * currentSkuYields.casesPerGal);
-      } else if (source === 'plts') {
-          stdCases = (product.type === "bottle") ? 0 : (val * currentSkuYields.casesPerPlt);
-      } else if (source === 'cases') {
-          stdCases = val;
-      }
-
-      if (product.type === "bottle") {
-          gals = stdCases / product.factor;
-      } else {
-          gals = stdCases / currentSkuYields.casesPerGal;
-          plts = stdCases / currentSkuYields.casesPerPlt;
-      }
+      stdCases = standardCasesFromSource(product, currentSkuYields, source, val);
+      ({ gals, plts } = deriveFromStandardCases(product, currentSkuYields, stdCases));
 
       // Update the other top row fields
       if (galsEl && source !== 'gals') galsEl.value = formatNum(gals);
@@ -1347,15 +1856,7 @@ function updateMaterial() {
 
 /** Evaluate a field that may hold either a number or an `=` expression. */
 function readNumericField(id) {
-  const str = (document.getElementById(id)?.value || "").trim();
-  if (str.startsWith("=")) {
-    try {
-      return new Function("return " + str.substring(1).replace(/[^0-9+\-*/(). ]/g, ""))() || 0;
-    } catch (e) {
-      return 0;
-    }
-  }
-  return parseLocaleNumber(str);
+  return parseNumericInput(document.getElementById(id)?.value || "");
 }
 
 /**
@@ -1372,12 +1873,10 @@ function calculateMaterial(source = 'target') {
   const onhandEl = document.getElementById("mat-onhand");
   const neededEl = document.getElementById("mat-needed");
 
-  // Cases produced per single unit of the material (pallet / roll / box / reel).
-  const casesPerUnit = data ? (data.unitsPerPallet / data.unitsPerCase) : 0;
-
+  const casesPerUnit = casesPerMaterialUnit(data);
   let units = 0;
 
-  if (!data || !casesPerUnit || !isFinite(casesPerUnit)) {
+  if (!data || !casesPerUnit) {
     if(window.animateNumber) window.animateNumber(neededEl, 0);
     updatePullReadout(0, data);
     return;
@@ -1385,11 +1884,10 @@ function calculateMaterial(source = 'target') {
 
   if (source === 'onhand') {
     units = readNumericField("mat-onhand");
-    const cases = units * casesPerUnit;
+    const cases = casesFromMaterialUnits(data, units);
     if (targetEl) targetEl.value = cases > 0 ? fmt(cases) : "";
   } else {
-    const target = readNumericField("mat-target");
-    units = target > 0 ? target / casesPerUnit : 0;
+    units = materialUnitsForCases(data, readNumericField("mat-target"));
     if (onhandEl) onhandEl.value = units > 0 ? fmt(units) : "";
   }
 
@@ -1409,7 +1907,9 @@ function updatePullReadout(units, data) {
   const noteEl = document.getElementById("mat-pull-note");
   if (!wrap || !valueEl || !noteEl) return;
 
-  if (!units || units <= 0 || !isFinite(units)) {
+  const pull = unitsToPull(units);
+
+  if (!pull) {
     wrap.classList.add("hidden");
     valueEl.innerText = "—";
     noteEl.innerText = "";
@@ -1417,18 +1917,369 @@ function updatePullReadout(units, data) {
   }
 
   const unitName = (data && data.unitName) || "Pallets";
-  const whole = Math.ceil(units - 1e-9); // tolerate float dust on exact figures
-  const remainder = whole - units;
-  const lastUsedPct = Math.round((1 - remainder) * 100);
-
   // Singularise "Pallets" → "Pallet" when pulling exactly one.
-  const label = whole === 1 && unitName.endsWith("s") ? unitName.slice(0, -1) : unitName;
+  const label = pull.whole === 1 && unitName.endsWith("s") ? unitName.slice(0, -1) : unitName;
 
   wrap.classList.remove("hidden");
-  valueEl.innerText = `${fmt(whole, { decimals: 0 })} ${label}`;
-  noteEl.innerText = remainder < 1e-6
+  valueEl.innerText = `${fmt(pull.whole, { decimals: 0 })} ${label}`;
+  noteEl.innerText = pull.exactlyFull
     ? "Exactly full — no partial unit."
-    : `${lastUsedPct}% of the last one used.`;
+    : `${pull.lastUsedPct}% of the last one used.`;
+}
+
+// --- RUN PLAN ---
+//
+// The other tabs each convert one quantity. A run plan answers the question an
+// operator actually starts the shift with: "I'm building this on Thursday —
+// what do I need?"
+//
+// A run is rarely a single pack size. 10,000 35-packs plus 2,000 18-packs plus
+// 5,000 12-packs is one run, and materials don't spread evenly across it: the
+// 35-pack film trays belong to the 35-pack rows only. So each row carries its
+// own count, pack size and materials, and calc.js sums each material across
+// just the rows that use it.
+
+/**
+ * Pack rows per product, persisted.
+ *
+ * Kept out of SESSION_FIELDS because it's structured data rather than an input
+ * value. A product's stored `materials` field seeds the ticks on a brand new
+ * row; after that the operator's own choice wins, since pack config varies run
+ * to run.
+ */
+const RUN_LINES_KEY = 'prodcalc.runLines.v1';
+
+/**
+ * The pack sizes this plant actually runs, matching the Syrup tab exactly.
+ *
+ * There are no 6-pack or 12-pack rows, because neither is a case size here: a
+ * "12-pack" is a 12x2 case and a "6-pack" is a 6x4 case. Both hold 24 units and
+ * both convert at 24. The label spells out both configs so an operator running
+ * either recognises this as their row — entering 6 or 12 would divide the
+ * standard-case count, and the syrup with it, by four or two.
+ */
+const PACK_SIZES = [
+  { value: 18, label: '18-Pack' },
+  { value: 20, label: '20-Pack' },
+  { value: 24, label: '24-Pack (12x2 / 6x4)' },
+  { value: 30, label: '30-Pack' },
+  { value: 35, label: '35-Pack' },
+];
+
+const PACK_VALUES = PACK_SIZES.map((p) => p.value);
+
+/** Snap a stored pack size onto a real one; anything unknown means a 12x2 case. */
+function normalisePackSize(value) {
+  const n = Number(value);
+  return PACK_VALUES.includes(n) ? n : 24;
+}
+
+function loadRunLines() {
+  try {
+    return JSON.parse(localStorage.getItem(RUN_LINES_KEY) || '{}') || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveRunLines(map) {
+  try {
+    localStorage.setItem(RUN_LINES_KEY, JSON.stringify(map));
+  } catch (e) { /* storage full or blocked — the plan still works this session */ }
+}
+
+/** Rows for the current SKU, seeded from the product's own bill of materials. */
+function runLinesFor(productName, product) {
+  const stored = loadRunLines();
+  const rows = stored[productName];
+  if (Array.isArray(rows) && rows.length) {
+    return rows.map((r) => ({
+      count: String(r.count ?? ''),
+      packSize: normalisePackSize(r.packSize),
+      // Drop anything renamed or deleted upstream.
+      materials: (r.materials || []).filter((n) => MATERIAL_DB[n]),
+    }));
+  }
+  return [{
+    count: '',
+    packSize: 24,
+    materials: parseMaterialList(product && product.materials).filter((n) => MATERIAL_DB[n]),
+  }];
+}
+
+function setRunLinesFor(productName, rows) {
+  const stored = loadRunLines();
+  stored[productName] = rows;
+  saveRunLines(stored);
+}
+
+/** Read the rows straight off the DOM, so the UI is the single source of truth. */
+function readRunLines() {
+  return Array.from(document.querySelectorAll('#run-pack-lines [data-run-line]')).map((row) => ({
+    count: row.querySelector('[data-run-count]')?.value ?? '',
+    packSize: normalisePackSize(row.querySelector('[data-run-pack]')?.value),
+    materials: Array.from(row.querySelectorAll('input[data-run-material]:checked'))
+      .map((b) => b.getAttribute('data-run-material')),
+  }));
+}
+
+/** Materials that could plausibly belong to this product, by category. */
+function candidateMaterials(product) {
+  if (!product) return [];
+  return Object.keys(MATERIAL_DB)
+    .filter((name) => {
+      const cat = MATERIAL_DB[name].category;
+      // An uncategorised material could belong to either line, so always offer it.
+      return !cat || cat === product.type;
+    })
+    .sort();
+}
+
+function updateRunProduct() {
+  const key = document.getElementById("run-product")?.value;
+  const product = PRODUCT_DB[key];
+  const badge = document.getElementById("run-info-badge");
+  const pltsCard = document.getElementById("run-plts-card");
+
+  if (badge) {
+    badge.textContent = product
+      ? (product.type === "bottle"
+          ? `Bottle · ${fmt(product.factor)} cases/gal`
+          : `Can · ${fmt(product.casesPerPallet)} cases/plt · ${fmt(product.galPerPallet, { decimals: 0 })} gal/plt`)
+      : "Select a product…";
+  }
+
+  // Bottles have no pallet figure, so the card would only ever read zero.
+  if (pltsCard) pltsCard.classList.toggle("hidden", !product || product.type === "bottle");
+
+  renderRunLines(product ? runLinesFor(key, product) : []);
+  calculateRunPlan();
+}
+
+/** Draw the pack rows. Called on SKU change and when rows are added/removed. */
+function renderRunLines(rows) {
+  const wrap = document.getElementById("run-pack-lines");
+  if (!wrap) return;
+
+  const key = document.getElementById("run-product")?.value;
+  const product = PRODUCT_DB[key];
+
+  if (!product) {
+    wrap.innerHTML = '<p class="text-sm text-slate-500 dark:text-slate-400">Select a product to start a run.</p>';
+    return;
+  }
+
+  const candidates = candidateMaterials(product);
+
+  wrap.innerHTML = rows.map((row, i) => {
+    const packSize = normalisePackSize(row.packSize);
+    const packOpts = PACK_SIZES.map((p) =>
+      `<option value="${p.value}" ${p.value === packSize ? 'selected' : ''}>${p.label}</option>`).join('');
+
+    const chosen = new Set(row.materials || []);
+    const boxes = candidates.length
+      ? candidates.map((name) => {
+          const m = MATERIAL_DB[name];
+          const label = m.number ? `[${m.number}] ${name}` : name;
+          return `<label class="flex items-start gap-2 py-1 px-1 cursor-pointer rounded hover:bg-slate-50 dark:hover:bg-white/5">
+            <input type="checkbox" data-run-material="${escapeHtml(name)}" ${chosen.has(name) ? 'checked' : ''}
+                   class="mt-0.5 h-4 w-4 flex-shrink-0 accent-brand-600 cursor-pointer" />
+            <span class="min-w-0 text-xs text-slate-700 dark:text-slate-200">${escapeHtml(label)}</span>
+          </label>`;
+        }).join('')
+      : '<p class="text-xs text-slate-500 dark:text-slate-400 py-1">No materials are categorised for this product type.</p>';
+
+    return `<div class="calc-card" data-run-line="${i}">
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="flex-1 min-w-[8rem]">
+          <label class="input-label" for="run-count-${i}">Cases</label>
+          <input type="text" inputmode="decimal" id="run-count-${i}" data-run-count placeholder="0"
+                 value="${escapeHtml(String(row.count ?? ''))}" class="input-numeric" />
+        </div>
+        <div>
+          <label class="input-label" for="run-pack-${i}">Pack size</label>
+          <select id="run-pack-${i}" data-run-pack class="input-field text-sm font-bold px-2 py-2.5 w-auto cursor-pointer">${packOpts}</select>
+        </div>
+        <div class="flex-shrink-0">
+          <button type="button" data-run-remove class="btn-ghost px-3 py-2.5 text-sm" aria-label="Remove this pack size">
+            <i class="fas fa-trash" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+      <details class="mt-3" ${chosen.size ? 'open' : ''}>
+        <summary class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 cursor-pointer select-none">
+          Materials for this pack <span data-run-count-badge class="font-normal normal-case tracking-normal">(${chosen.size} ticked)</span>
+        </summary>
+        <div class="mt-2 max-h-44 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 p-2">${boxes}</div>
+      </details>
+    </div>`;
+  }).join('');
+
+  wireRunLineEvents();
+}
+
+/** One handler set per redraw — rows are re-rendered wholesale. */
+function wireRunLineEvents() {
+  const wrap = document.getElementById("run-pack-lines");
+  if (!wrap) return;
+
+  wrap.querySelectorAll('[data-run-count]').forEach((el) => {
+    el.addEventListener('input', calculateRunPlan);
+    el.addEventListener('change', () => handleMath(el, calculateRunPlan));
+  });
+
+  wrap.querySelectorAll('[data-run-pack]').forEach((el) => {
+    el.addEventListener('change', calculateRunPlan);
+  });
+
+  wrap.querySelectorAll('input[data-run-material]').forEach((el) => {
+    el.addEventListener('change', () => {
+      // Keep the "(n ticked)" badge honest without redrawing the whole row,
+      // which would collapse the details the operator is working in.
+      const row = el.closest('[data-run-line]');
+      const badge = row?.querySelector('[data-run-count-badge]');
+      if (badge) {
+        badge.textContent = `(${row.querySelectorAll('input[data-run-material]:checked').length} ticked)`;
+      }
+      calculateRunPlan();
+    });
+  });
+
+  wrap.querySelectorAll('[data-run-remove]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const rows = readRunLines();
+      const idx = Number(btn.closest('[data-run-line]')?.getAttribute('data-run-line'));
+      rows.splice(idx, 1);
+      // Never leave the operator with nothing to type into.
+      renderRunLines(rows.length ? rows : [{ count: '', packSize: 24, materials: [] }]);
+      calculateRunPlan();
+    });
+  });
+}
+
+function addRunLine() {
+  const key = document.getElementById("run-product")?.value;
+  if (!PRODUCT_DB[key]) return;
+  const rows = readRunLines();
+  rows.push({ count: '', packSize: 24, materials: [] });
+  renderRunLines(rows);
+  calculateRunPlan();
+}
+
+/** "Pallets" -> "Pallet" when there's exactly one. */
+function unitLabel(unitName, whole) {
+  return whole === 1 && unitName.endsWith('s') ? unitName.slice(0, -1) : unitName;
+}
+
+function calculateRunPlan() {
+  const key = document.getElementById("run-product")?.value;
+  const product = PRODUCT_DB[key];
+  const listWrap = document.getElementById("run-lines");
+  if (!listWrap) return;
+
+  const rows = readRunLines();
+  const plan = buildRunPlan({
+    product,
+    // `=` expressions are allowed in the count fields, same as everywhere else.
+    lines: rows.map((r) => ({ ...r, count: parseNumericInput(r.count) })),
+    materialsDb: MATERIAL_DB,
+  });
+
+  if (product) setRunLinesFor(key, rows);
+
+  const totalEl = document.getElementById("run-total-cases");
+  const galsEl = document.getElementById("run-gals");
+  const pltsEl = document.getElementById("run-plts");
+  if (totalEl) totalEl.innerText = fmt(plan.stdCases);
+  if (galsEl) galsEl.innerText = fmt(plan.gals);
+  if (pltsEl) pltsEl.innerText = fmt(plan.plts);
+
+  if (!product || !(plan.stdCases > 0)) {
+    listWrap.innerHTML = '<p class="text-sm text-slate-500 dark:text-slate-400">Enter a case count to see what to pull.</p>';
+    updateRunSummary(key, plan);
+    return;
+  }
+
+  if (!plan.materials.length) {
+    listWrap.innerHTML = '<p class="text-sm text-slate-500 dark:text-slate-400">No materials ticked for this run.</p>';
+    updateRunSummary(key, plan);
+    return;
+  }
+
+  listWrap.innerHTML = plan.materials.map((line) => {
+    if (!line.usable) {
+      return `<div class="calc-card border-amber-300 dark:border-amber-500/40">
+        <p class="font-bold text-sm text-slate-800 dark:text-slate-100">${escapeHtml(line.name)}</p>
+        <p class="text-sm text-amber-700 dark:text-amber-300 mt-1">Can't plan this one — its units per pallet/case aren't set.</p>
+      </div>`;
+    }
+
+    const unitName = unitLabel(line.unitName, line.pull && line.pull.whole);
+    const note = line.pull
+      ? (line.pull.exactlyFull ? 'Exactly full — no partial unit.' : `${line.pull.lastUsedPct}% of the last one used.`)
+      : '';
+    // Only worth mentioning when the material isn't already on a 24 baseline.
+    const packNote = line.packFactor !== 1
+      ? `<span class="field-hint block mt-1">Pack factor ${fmt(line.packFactor)} applied.</span>`
+      : '';
+
+    return `<div class="calc-card">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="font-bold text-sm text-slate-800 dark:text-slate-100">${escapeHtml(line.name)}</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">${escapeHtml(line.desc)}</p>
+          ${packNote}
+        </div>
+        <div class="text-right flex-shrink-0">
+          <p class="text-2xl font-black text-brand-700 dark:text-brand-300">${fmt(line.pull.whole, { decimals: 0 })} <span class="text-sm font-bold">${escapeHtml(unitName)}</span></p>
+          <p class="text-xs text-slate-500 dark:text-slate-400">${fmt(line.units)} exact · ${escapeHtml(note)}</p>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  updateRunSummary(key, plan);
+}
+
+/** Plain-text plan for the clipboard — what gets carried to the floor. */
+function updateRunSummary(productName, plan) {
+  const el = document.getElementById("run-summary");
+  if (!el) return;
+
+  if (!productName || !(plan.stdCases > 0)) { el.value = ""; return; }
+
+  const rows = [`RUN PLAN — ${productName}`];
+
+  plan.lines.filter((l) => l.stdCases > 0).forEach((l) => {
+    const label = (PACK_SIZES.find((p) => p.value === l.packSize) || {}).label || `${l.packSize}-Pack`;
+    rows.push(`  ${fmt(l.count, { decimals: 0 })} × ${label} = ${fmt(l.stdCases)} std cases`);
+  });
+
+  rows.push(
+    `Total: ${fmt(plan.stdCases)} standard cases`,
+    `Syrup: ${fmt(plan.gals)} gal${plan.plts > 0 ? ` · ${fmt(plan.plts)} plts` : ''}`
+  );
+
+  if (plan.materials.length) {
+    rows.push('', 'Materials to pull:');
+    plan.materials.forEach((line) => {
+      rows.push(line.usable && line.pull
+        ? `  ${line.name}: ${fmt(line.pull.whole, { decimals: 0 })} ${unitLabel(line.unitName, line.pull.whole)} (${fmt(line.units)} exact)`
+        : `  ${line.name}: not configured`);
+    });
+  }
+
+  el.value = rows.join('\n');
+}
+
+function clearRunPlan() {
+  const key = document.getElementById("run-product")?.value;
+  // Keep the ticked materials — those describe the SKU, not this particular run.
+  const rows = readRunLines().map((r) => ({ ...r, count: '' }));
+  renderRunLines(rows.length ? rows : [{ count: '', packSize: 24, materials: [] }]);
+  calculateRunPlan();
+  saveSession();
+  announce("Run plan cleared");
 }
 
 function clearMaterial() {
@@ -1448,11 +2299,10 @@ function clearMaterial() {
 
 function handleMath(el, callback) {
   if (el.value.trim().startsWith("=")) {
-    try {
-      const result = new Function("return " + el.value.substring(1).replace(/[^0-9+\-*/(). ]/g, ""))();
-      if (isFinite(result)) { el.value = fmt(Math.round(result * 100) / 100); if (callback) callback(); }
-    } catch (e) {}
-  } else { if (callback) callback(); }
+    const result = evaluateExpression(el.value.trim().slice(1));
+    if (isFinite(result)) el.value = fmt(Math.round(result * 100) / 100);
+  }
+  if (callback) callback();
 }
 
 // BIND FUNCTIONS EXPLICITLY TO WINDOW FOR HTML ACCESS
@@ -1462,9 +2312,14 @@ window.calculateSyrup = calculateSyrup;
 window.clearSyrup = clearSyrup; 
 window.updateMaterial = updateMaterial; 
 window.calculateMaterial = calculateMaterial;
-window.clearMaterial = clearMaterial; 
-window.handleMath = handleMath; 
+window.clearMaterial = clearMaterial;
+window.updateRunProduct = updateRunProduct;
+window.calculateRunPlan = calculateRunPlan;
+window.addRunLine = addRunLine;
+window.clearRunPlan = clearRunPlan;
+window.handleMath = handleMath;
 window.calculateDateCode = calculateDateCode;
+window.lookupPrintCode = lookupPrintCode;
 window.migrateDataToCloud = migrateDataToCloud;
 window.switchAdminTab = switchAdminTab;
 window.toggleProductFields = toggleProductFields;
@@ -1583,7 +2438,9 @@ document.addEventListener('keydown', (e) => {
 
     if (e.altKey && e.key === '1') { e.preventDefault(); switchTab('syrup'); }
     else if (e.altKey && e.key === '2') { e.preventDefault(); switchTab('materials'); }
-    else if (e.altKey && e.key === '3') { e.preventDefault(); switchTab('datecode'); }
+    // Numbered by position in the tab strip, so Run Plan takes 3 and QA Codes moves to 4.
+    else if (e.altKey && e.key === '3') { e.preventDefault(); switchTab('runplan'); }
+    else if (e.altKey && e.key === '4') { e.preventDefault(); switchTab('datecode'); }
     else if (e.key === '?' && !typing) { e.preventDefault(); window.showHelpModal(); }
     else if (e.key === '/' && !typing) {
         // Jump straight to the search box of the visible tab.

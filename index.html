@@ -80,15 +80,48 @@
 <!-- MAIN DASHBOARD CONTENT -->
 <main id="main-content" class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 w-full relative z-10">
 
+  <!-- DATA FRESHNESS BANNER -->
+  <!-- Populated by renderDataStatus() in src/main.js. Stays hidden while the
+       figures on screen are live; appears when they are cached or hardcoded. -->
+  <div id="data-status" class="hidden mb-6" role="status" aria-live="polite">
+    <div id="data-status-box" class="flex items-start gap-3 rounded-xl border px-4 py-3 shadow-card">
+      <i id="data-status-icon" class="fas fa-spinner mt-0.5 flex-shrink-0" aria-hidden="true"></i>
+      <div class="min-w-0">
+        <p id="data-status-label" class="font-bold text-sm leading-tight"></p>
+        <p id="data-status-detail" class="text-sm mt-0.5 opacity-90"></p>
+      </div>
+    </div>
+  </div>
+
   <!-- ADMIN PANEL (Hidden by default, requires login) -->
   <div id="admin-panel" class="hidden glass-panel p-6 mb-8">
-    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-3">
-      <h2 class="font-bold text-brand-700 dark:text-brand-300 text-xl flex items-center">
-        <i class="fas fa-shield-halved mr-2" aria-hidden="true"></i> Admin Dashboard
-      </h2>
-      <button onclick="migrateDataToCloud()" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-3 rounded-lg shadow-card transition-colors">
-        <i class="fas fa-cloud-arrow-up mr-1" aria-hidden="true"></i> Migrate Local Data to Cloud
+    <!-- Header doubles as the collapse toggle so the panel doesn't permanently
+         push the calculator down the page. -->
+    <div class="flex items-center justify-between gap-3">
+      <button id="admin-toggle" type="button" class="flex items-center gap-3 flex-1 min-w-0 text-left rounded-lg -m-1 p-1" aria-expanded="false" aria-controls="admin-body">
+        <i id="admin-toggle-icon" class="fas fa-chevron-right text-brand-600 dark:text-brand-400 transition-transform" aria-hidden="true"></i>
+        <span class="font-bold text-brand-700 dark:text-brand-300 text-xl flex items-center">
+          <i class="fas fa-shield-halved mr-2" aria-hidden="true"></i> Admin Dashboard
+        </span>
       </button>
+      <span id="admin-signed-in" class="hidden sm:inline-flex items-center gap-2 text-xs font-medium px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700 max-w-[16rem] truncate">
+        <i class="fas fa-user-shield text-brand-500" aria-hidden="true"></i><span id="admin-user-email">—</span>
+      </span>
+    </div>
+
+    <div id="admin-body" class="hidden mt-6">
+
+    <div class="flex flex-wrap justify-end gap-2 mb-4">
+      <button onclick="migrateDataToCloud()" type="button" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-3 rounded-lg shadow-card transition-colors">
+        <i class="fas fa-cloud-arrow-up mr-1" aria-hidden="true"></i> Sync built-ins to cloud
+      </button>
+      <button onclick="exportAdminCsv()" type="button" class="bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-2 px-3 rounded-lg shadow-card transition-colors">
+        <i class="fas fa-file-arrow-down mr-1" aria-hidden="true"></i> Export CSV
+      </button>
+      <button id="admin-import-btn" type="button" class="bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-2 px-3 rounded-lg shadow-card transition-colors">
+        <i class="fas fa-file-arrow-up mr-1" aria-hidden="true"></i> Import CSV
+      </button>
+      <input id="admin-import-file" type="file" accept=".csv,text/csv" class="hidden">
     </div>
 
     <!-- Admin Tabs -->
@@ -137,6 +170,10 @@
             <div id="prod-bottle-fields" class="hidden">
               <input id="new-prod-factor" type="number" step="0.0001" placeholder="Conversion Factor" class="input-field p-2.5 text-sm">
             </div>
+            <div>
+              <label for="new-prod-materials" class="input-label">Default Materials <span class="field-hint">— pre-ticks the Run Plan</span></label>
+              <select id="new-prod-materials" multiple size="5" class="input-field p-2.5 text-sm"></select>
+            </div>
           </div>
           <button onclick="saveProduct()" type="button" id="btn-save-product" class="btn-primary px-4 py-2.5 w-full">Save Product</button>
         </div>
@@ -160,8 +197,18 @@
 
       <!-- Right: Database List -->
       <div class="flex-1 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-700 pt-4 md:pt-0 md:pl-8">
-        <h3 class="font-bold text-slate-800 dark:text-slate-100 mb-4"><i class="fas fa-list mr-2" aria-hidden="true"></i> Live Database</h3>
-        <div id="admin-database-list" class="max-h-80 overflow-y-auto pr-2 space-y-3 rounded-lg p-3 border bg-slate-50 border-slate-200 dark:bg-slate-900/50 dark:border-slate-700">
+        <div class="flex items-center justify-between gap-2 mb-3">
+          <h3 class="font-bold text-slate-800 dark:text-slate-100"><i class="fas fa-list mr-2" aria-hidden="true"></i> Live Database</h3>
+          <span id="admin-list-count" class="field-hint"></span>
+        </div>
+        <div class="relative mb-3">
+          <input id="admin-filter" type="text" placeholder="Filter by name…" autocomplete="off" class="input-field w-full pl-9 pr-8 py-2 text-sm">
+          <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs" aria-hidden="true"></i>
+          <button id="admin-filter-clear" type="button" aria-label="Clear filter" class="hidden absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-brand-600">
+            <i class="fas fa-times text-xs" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div id="admin-database-list" class="max-h-80 overflow-y-auto pr-2 rounded-lg p-3 border bg-slate-50 border-slate-200 dark:bg-slate-900/50 dark:border-slate-700">
           <div class="animate-pulse space-y-3">
             <div class="h-4 bg-slate-200 dark:bg-slate-700 rounded w-3/4"></div>
             <div class="h-4 bg-slate-200 dark:bg-slate-700 rounded w-1/2"></div>
@@ -171,6 +218,7 @@
         </div>
       </div>
     </div>
+    </div><!-- /#admin-body -->
   </div>
 
   <div class="glass-panel overflow-visible min-h-[500px]">
@@ -181,6 +229,9 @@
       </button>
       <button onclick="switchTab('materials')" type="button" id="tab-materials" role="tab" aria-controls="content-materials" aria-selected="false" class="nav-tab flex-1 py-4 px-6 text-center font-bold text-sm sm:text-base flex items-center justify-center gap-2 min-w-max">
         <i class="fas fa-boxes-stacked" aria-hidden="true"></i> Materials
+      </button>
+      <button onclick="switchTab('runplan')" type="button" id="tab-runplan" role="tab" aria-controls="content-runplan" aria-selected="false" class="nav-tab flex-1 py-4 px-6 text-center font-bold text-sm sm:text-base flex items-center justify-center gap-2 min-w-max">
+        <i class="fas fa-clipboard-list" aria-hidden="true"></i> Run Plan
       </button>
       <button onclick="switchTab('datecode')" type="button" id="tab-datecode" role="tab" aria-controls="content-datecode" aria-selected="false" class="nav-tab flex-1 py-4 px-6 text-center font-bold text-sm sm:text-base flex items-center justify-center gap-2 min-w-max">
         <i class="fas fa-calendar-check" aria-hidden="true"></i> QA Codes
@@ -262,7 +313,7 @@
               <select id="syrup-pack-size-2" onchange="calculateSyrup('packsize-2')" aria-label="Pack size for line B" class="input-field text-xs font-bold px-2 py-1 w-auto cursor-pointer">
                 <option value="18">18-Pack</option>
                 <option value="20">20-Pack</option>
-                <option value="24" selected>24-Pack (12x2pk)</option>
+                <option value="24" selected>24-Pack (12x2 / 6x4)</option>
                 <option value="30">30-Pack</option>
                 <option value="35">35-Pack</option>
               </select>
@@ -389,6 +440,77 @@
       </div>
     </div>
 
+    <!-- ============ RUN PLAN ============ -->
+    <div id="content-runplan" class="p-5 sm:p-8 tab-pane" role="tabpanel" aria-labelledby="tab-runplan">
+      <div class="flex items-center gap-3 mb-6 border-b border-slate-200 dark:border-slate-700 pb-4">
+        <h2 class="font-bold text-slate-800 dark:text-slate-100 text-xl"><i class="fas fa-clipboard-list mr-2 text-brand-600 dark:text-brand-400" aria-hidden="true"></i>Run Plan</h2>
+      </div>
+
+      <div class="mb-6">
+        <label for="run-product" class="input-label">SKU / Product Size</label>
+        <div class="relative">
+          <select id="run-product" data-combobox="Search products…" onchange="updateRunProduct()" class="select-field text-lg"></select>
+          <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400"><i class="fas fa-chevron-down text-xs" aria-hidden="true"></i></div>
+        </div>
+        <div id="run-info-badge" class="mt-3 inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-brand-100 text-brand-800 border border-brand-200 dark:bg-brand-500/15 dark:text-brand-200 dark:border-brand-800">Select a product…</div>
+      </div>
+
+      <!-- Pack lines: one per pack size in the run -->
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <h3 class="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">Cases To Build</h3>
+        <span class="field-hint">— one row per pack size, with the materials that pack uses</span>
+      </div>
+
+      <div id="run-pack-lines" class="space-y-3 mb-3"></div>
+
+      <button onclick="addRunLine()" type="button" class="btn-ghost px-3 py-2 text-sm mb-6">
+        <i class="fas fa-plus mr-2" aria-hidden="true"></i>Add pack size
+      </button>
+
+      <!-- Run totals -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-5 mb-8">
+        <div class="calc-card-primary">
+          <div class="flex items-center justify-between mb-2">
+            <span class="input-label mb-0 text-brand-800 dark:text-brand-300 flex items-center"><i class="fas fa-box-open mr-2" aria-hidden="true"></i>Standard Cases</span>
+            <button type="button" class="copy-btn" data-copy-from="run-total-cases" data-copy-label="Standard cases">
+              <i class="fas fa-copy" aria-hidden="true"></i><span>Copy</span>
+            </button>
+          </div>
+          <p class="text-3xl font-black text-brand-700 dark:text-brand-300"><span id="run-total-cases">0</span> <span class="text-base font-bold text-brand-500">24pk</span></p>
+        </div>
+        <div class="calc-card">
+          <div class="flex items-center justify-between mb-2">
+            <span class="input-label mb-0 flex items-center"><i class="fas fa-fill-drip mr-2 text-slate-400" aria-hidden="true"></i>Syrup Needed</span>
+            <button type="button" class="copy-btn" data-copy-from="run-gals" data-copy-label="Syrup gallons">
+              <i class="fas fa-copy" aria-hidden="true"></i><span>Copy</span>
+            </button>
+          </div>
+          <p class="text-3xl font-black text-slate-800 dark:text-slate-100"><span id="run-gals">0</span> <span class="text-base font-bold text-slate-400">gal</span></p>
+        </div>
+        <div class="calc-card" id="run-plts-card">
+          <span class="input-label flex items-center"><i class="fas fa-pallet mr-2 text-slate-400" aria-hidden="true"></i>Can Bodies</span>
+          <p class="text-3xl font-black text-slate-800 dark:text-slate-100"><span id="run-plts">0</span> <span class="text-base font-bold text-slate-400">plts</span></p>
+        </div>
+      </div>
+
+      <!-- Aggregated pull list -->
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <h3 class="text-xs font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">Materials To Pull</h3>
+        <span class="field-hint">— totalled across every pack size above</span>
+      </div>
+
+      <div id="run-lines" class="space-y-3"></div>
+
+      <div class="mt-6 flex flex-wrap justify-end gap-2 border-t border-slate-200 dark:border-slate-700 pt-4">
+        <button type="button" class="copy-btn" data-copy-from="run-summary" data-copy-label="Run plan">
+          <i class="fas fa-copy" aria-hidden="true"></i><span>Copy plan</span>
+        </button>
+        <button onclick="clearRunPlan()" type="button" class="btn-ghost px-3 py-2 text-sm"><i class="fas fa-undo mr-2" aria-hidden="true"></i>Clear</button>
+      </div>
+      <!-- Plain-text version of the plan, for the copy button. -->
+      <textarea id="run-summary" class="sr-only" readonly aria-hidden="true"></textarea>
+    </div>
+
     <!-- ============ DATE CODES ============ -->
     <div id="content-datecode" class="p-5 sm:p-8 tab-pane" role="tabpanel" aria-labelledby="tab-datecode">
       <div class="flex items-center gap-3 mb-6 border-b border-slate-200 dark:border-slate-700 pb-4">
@@ -426,6 +548,37 @@
           </div>
         </div>
       </div>
+
+      <!-- ---------- REVERSE LOOKUP ---------- -->
+      <div class="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
+        <div class="flex flex-wrap items-center gap-2 mb-1">
+          <h3 class="font-bold text-slate-800 dark:text-slate-100 text-lg"><i class="fas fa-magnifying-glass mr-2 text-brand-600 dark:text-brand-400" aria-hidden="true"></i>Look Up A Code</h3>
+        </div>
+        <p class="field-hint mb-4">Read a code off a can or bottle to find out when it was made.</p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8 items-start">
+          <div class="space-y-5">
+            <div>
+              <label for="lookup-code" class="input-label">Print Code</label>
+              <input type="text" id="lookup-code" placeholder="BBJUN0126DDC" autocomplete="off" spellcheck="false"
+                     oninput="lookupPrintCode()" class="input-field px-4 py-3 font-mono text-base uppercase" />
+            </div>
+            <div>
+              <label for="lookup-product" class="input-label">Product Category <span class="field-hint">— sets the shelf life</span></label>
+              <div class="relative">
+                <select id="lookup-product" data-combobox="Search categories…" onchange="lookupPrintCode()" class="select-field text-sm"></select>
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400"><i class="fas fa-chevron-down text-xs" aria-hidden="true"></i></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="lookup-panel" class="rounded-2xl border p-5 sm:p-8 min-w-0 bg-gradient-to-br from-slate-50 to-white border-slate-200 dark:from-slate-900/60 dark:to-slate-900/30 dark:border-slate-700">
+            <div id="lookup-result" class="text-center">
+              <p class="text-sm text-slate-500 dark:text-slate-400">Enter a print code to decode it.</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -448,7 +601,7 @@
     <div class="flex flex-col md:flex-row justify-between items-center gap-3">
       <div class="text-sm text-slate-500 dark:text-slate-400">&copy; 2026 Release The Fizz &middot; Production Calculator <span class="text-xs text-slate-400 dark:text-slate-500 ml-1">v3.0</span></div>
       <div class="flex items-center gap-6 text-sm">
-        <span class="field-hint hidden sm:inline">Alt+1 / Alt+2 / Alt+3 to switch tabs</span>
+        <span class="field-hint hidden sm:inline">Alt+1 … Alt+4 to switch tabs</span>
         <a href="mailto:support@releasethefizz.work" class="text-slate-500 hover:text-brand-700 dark:text-slate-400 dark:hover:text-brand-300 transition-colors">Support</a>
       </div>
     </div>
