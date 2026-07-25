@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// Production Calculator — Firestore security rules
+//
+// Intent:
+//   * The calculator is FREE AND OPEN. Anyone can read the data with no login,
+//     no account, no barrier. That is deliberate and should stay that way.
+//   * Only named admin accounts may modify the data, because a bad conversion
+//     factor propagates to every device on the floor instantly via onSnapshot.
+//
+// Deploy with:  firebase deploy --only firestore:rules
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Admins are matched on UID rather than email. UIDs are immutable and do
+    // not depend on `email_verified`, which would silently revoke access if
+    // that flag was never set. Add a UID to this list to grant admin rights.
+    function isAdmin() {
+      return request.auth != null
+          && request.auth.uid in [
+               're24kujslZe4gs7RqriInAQxQ4t2'  // amazingspidermanee@gmail.com
+             ];
+    }
+
+    // Public collections are listed explicitly. Anything not named below is
+    // closed by default, so a future collection (audit logs, settings, anything
+    // holding an email address) is never world-readable by accident.
+    match /products/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /materials/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /qacodes/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -1,4 +1,8 @@
 import './styles.css';
+// Self-hosted Font Awesome (solid set only) — removes the blocking cdnjs
+// request and lets the service worker cache the icon font for offline use.
+import '@fortawesome/fontawesome-free/css/fontawesome.min.css';
+import '@fortawesome/fontawesome-free/css/solid.min.css';
 import Swal from 'sweetalert2';
 import { initializeApp } from "firebase/app";
 import { 
@@ -86,7 +90,7 @@ let QA_CODE_DB = {};
 DATE_CODE_BOTTLES.forEach(d => QA_CODE_DB[d.name] = { ...d, category: 'bottle' });
 DATE_CODE_CANS.forEach(d => QA_CODE_DB[d.name] = { ...d, category: 'can' });
 
-let MATERIAL_IDS = {}; 
+let MATERIAL_IDS = {};
 let PRODUCT_IDS = {};
 let QA_CODE_IDS = {};
 
@@ -98,26 +102,24 @@ let currentSkuYields = { casesPerGal: 0, casesPerPlt: 0 };
 // --- INIT ---
 async function init() {
   try {
-    // --- BACKGROUND CYCLER ---
-    const currentBgIndex = parseInt(localStorage.getItem('bgCycleIndex') || '0');
-    document.body.classList.add('bg-' + ((currentBgIndex % 4) + 1));
-    localStorage.setItem('bgCycleIndex', currentBgIndex + 1);
-
     setupAuthUI();
     const dateInput = document.getElementById("datecode-date");
     if (dateInput) dateInput.valueAsDate = new Date();
 
-    const fizzContainer = document.getElementById("fizz-container");
-    if (fizzContainer && fizzContainer.childElementCount === 0) {
-      for (let i = 0; i < 20; i++) createBubble(fizzContainer);
-    }
+    initFizz();
+    initNavCondense();
+    initCopyButtons();
 
     // Safety net: Populate immediately from defaults so the app never crashes
     populateDropdowns();
     populateDateCodeDropdown();
 
-    // Inject the Pro Tip explaining standard cases
-    injectProTip();
+    // Turn the native selects into searchable comboboxes (progressive
+    // enhancement — the underlying <select> stays the source of truth).
+    document.querySelectorAll('select[data-combobox]').forEach(enhanceSelect);
+
+    // Bring back whatever the user was last working on.
+    restoreSession();
 
     // LISTENER: Materials
     onSnapshot(query(collection(db, "materials"), orderBy("name")), (snapshot) => {
@@ -178,8 +180,8 @@ async function init() {
       QA_CODE_DB = { ...QA_CODE_DB, ...newDB };
 
       populateDateCodeDropdown();
-      calculateDateCode(); 
-      if(currentAdminTab === 'qacodes') renderAdminList(); 
+      calculateDateCode();
+      if(currentAdminTab === 'qacodes') renderAdminList();
     }, (error) => console.warn("Firestore access restricted, continuing with defaults.", error.message));
 
   } catch (error) {
@@ -187,24 +189,189 @@ async function init() {
   }
 }
 
-// --- DOM INJECTION: PRO TIP ---
-function injectProTip() {
-  if (document.getElementById('conversion-pro-tip')) return;
-  
-  // Target the badge right underneath the Product Dropdown
-  const infoBadge = document.getElementById('syrup-info-badge');
+// --- SHARED HELPERS ---
 
-  const tip = document.createElement('div');
-  tip.id = 'conversion-pro-tip';
-  tip.className = 'mt-6 mb-2 bg-blue-50/60 border border-blue-200 rounded-lg p-4 shadow-sm backdrop-blur-sm';
-  tip.innerHTML = `<div class="flex items-start"> <i class="fas fa-lightbulb text-blue-600 mt-1 mr-3 text-lg"></i> <div> <h4 class="font-bold text-blue-900 text-sm uppercase tracking-wide mb-1">Pro Tip: Standard Case Conversions</h4> <p class="text-xs text-blue-800 leading-relaxed font-medium"> Our plant tracks all production volume using a standard 24-pack as the baseline. Because of this, anytime we run a different package size, we have to do a little math to make sure our physical counts match the system. <br><br> For example, a <strong>35-pack</strong> has 11 more cans than a standard 24-pack. When you divide 35 by 24, you get a multiplier of <strong>1.458</strong>. This means every physical 35-pack we build actually counts as ~1.46 standard cases! <br><br> The same rule applies to smaller packs. An <strong>18-pack</strong> has 6 fewer cans than a 24-pack. Dividing 18 by 24 gives us <strong>0.75</strong>, meaning each physical 18-pack only counts as three-quarters of a standard case. Converting our boxes like this ensures our total can counts always line up perfectly at the end of the shift. </p> </div> </div>`;
+const prefersReducedMotion = () =>
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  if (infoBadge && infoBadge.parentNode) {
-      infoBadge.parentNode.insertBefore(tip, infoBadge.nextSibling);
-  } else {
-      const syrupTab = document.getElementById('content-syrup');
-      if (syrupTab) syrupTab.appendChild(tip);
+/** Consistent number formatting: thousands separators, at most 2 decimals. */
+function fmt(num, { decimals = 2 } = {}) {
+  if (num === null || num === undefined || isNaN(num) || !isFinite(num)) return '';
+  return Number(num).toLocaleString(undefined, {
+    minimumFractionDigits: Number.isInteger(num) ? 0 : decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+/** Strip locale formatting back to a raw number (inputs are user-editable). */
+function parseLocaleNumber(str) {
+  if (typeof str !== 'string') return parseFloat(str) || 0;
+  return parseFloat(str.replace(/,/g, '')) || 0;
+}
+
+function announce(message) {
+  const region = document.getElementById('sr-status');
+  if (region) region.textContent = message;
+}
+
+function toast(icon, title) {
+  Swal.fire({ toast: true, position: 'top-end', icon, title, showConfirmButton: false, timer: 2500 });
+}
+
+// --- FIZZ (respects reduced-motion and a user toggle) ---
+function initFizz() {
+  const container = document.getElementById('fizz-container');
+  if (!container) return;
+
+  const render = () => {
+    container.innerHTML = '';
+    if (prefersReducedMotion() || document.documentElement.classList.contains('no-fizz')) return;
+    // Fewer bubbles on phones — 20 compositing layers is a real battery cost.
+    const count = window.innerWidth < 640 ? 8 : 18;
+    for (let i = 0; i < count; i++) createBubble(container);
+  };
+
+  render();
+
+  const fizzBtn = document.getElementById('fizz-toggle');
+  const fizzIcon = document.getElementById('fizz-toggle-icon');
+
+  const syncFizzIcon = () => {
+    if (!fizzIcon) return;
+    const off = document.documentElement.classList.contains('no-fizz');
+    fizzIcon.classList.toggle('fa-wind', !off);
+    fizzIcon.classList.toggle('fa-ban', off);
+    if (fizzBtn) fizzBtn.setAttribute('aria-pressed', String(!off));
+  };
+  syncFizzIcon();
+
+  if (fizzBtn) {
+    fizzBtn.addEventListener('click', () => {
+      const off = document.documentElement.classList.toggle('no-fizz');
+      localStorage.setItem('fizz', off ? 'off' : 'on');
+      syncFizzIcon();
+      render();
+    });
   }
+
+  window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', render);
+}
+
+// --- NAVBAR CONDENSE ON SCROLL ---
+function initNavCondense() {
+  const nav = document.getElementById('site-nav');
+  if (!nav) return;
+
+  let ticking = false;
+  const update = () => {
+    const condensed = window.scrollY > 40;
+    nav.classList.toggle('condensed', condensed);
+    document.body.classList.toggle('nav-condensed', condensed);
+    ticking = false;
+  };
+
+  window.addEventListener('scroll', () => {
+    if (!ticking) {
+      ticking = true;
+      requestAnimationFrame(update);
+    }
+  }, { passive: true });
+
+  update();
+}
+
+// --- COPY TO CLIPBOARD ---
+function initCopyButtons() {
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.copy-btn[data-copy-from]');
+    if (!btn) return;
+
+    const source = document.getElementById(btn.dataset.copyFrom);
+    if (!source) return;
+
+    const value = ('value' in source ? source.value : source.textContent).trim();
+    if (!value || value === '---' || value === '—') {
+      toast('info', 'Nothing to copy yet');
+      return;
+    }
+
+    await copyText(value, `${btn.dataset.copyLabel || 'Value'} copied`);
+    flashCopied(btn);
+  });
+
+  const summaryBtn = document.getElementById('syrup-copy-summary');
+  if (summaryBtn) {
+    summaryBtn.addEventListener('click', async () => {
+      const text = buildSyrupSummary();
+      if (!text) {
+        toast('info', 'Enter a calculation first');
+        return;
+      }
+      await copyText(text, 'Summary copied');
+      flashCopied(summaryBtn);
+    });
+  }
+}
+
+async function copyText(text, successMessage) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Fallback for insecure contexts / older in-plant browsers.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    announce(successMessage);
+    toast('success', successMessage);
+  } catch (err) {
+    toast('error', 'Could not copy to clipboard');
+  }
+}
+
+function flashCopied(btn) {
+  const icon = btn.querySelector('i');
+  const label = btn.querySelector('span');
+  const originalLabel = label ? label.textContent : null;
+
+  btn.classList.add('copied');
+  if (icon) icon.classList.replace('fa-copy', 'fa-check');
+  if (label) label.textContent = 'Copied';
+
+  setTimeout(() => {
+    btn.classList.remove('copied');
+    if (icon) icon.classList.replace('fa-check', 'fa-copy');
+    if (label) label.textContent = originalLabel;
+  }, 1600);
+}
+
+/** Human-readable digest of the whole syrup calculation, for pasting into notes. */
+function buildSyrupSummary() {
+  const sku = document.getElementById('syrup-product')?.value;
+  const gals = document.getElementById('syrup-gals')?.value.trim();
+  const plts = document.getElementById('syrup-plts')?.value.trim();
+  const cases = document.getElementById('syrup-cases')?.value.trim();
+  if (!sku || (!gals && !plts && !cases)) return '';
+
+  const lines = [`${sku} — ${new Date().toLocaleDateString()}`];
+  if (gals) lines.push(`Syrup: ${gals} gal`);
+  if (plts) lines.push(`Can bodies: ${plts} plts`);
+  if (cases) lines.push(`Standard cases (24pk): ${cases}`);
+
+  [1, 2, 3].forEach((n) => {
+    const val = document.getElementById(`syrup-actual-cases-${n}`)?.value.trim();
+    const pack = document.getElementById(`syrup-pack-size-${n}`)?.value;
+    if (val) lines.push(`Line ${'ABC'[n - 1]}: ${val} cs @ ${pack}-pack`);
+  });
+
+  return lines.join('\n');
 }
 
 // --- CLOUD MIGRATION TOOL ---
@@ -270,14 +437,14 @@ function setupAuthUI() {
         overlay.className = "fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4";
         
         const modal = document.createElement('div');
-        modal.className = "bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full";
+        modal.className = "glass-panel p-6 max-w-sm w-full";
         modal.innerHTML = `
-          <h2 class="text-2xl font-bold mb-4 text-gray-800">Admin Login</h2>
-          <input type="email" id="modal-email" placeholder="Email" class="w-full mb-3 p-3 border border-gray-300 rounded-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-500" />
-          <input type="password" id="modal-password" placeholder="Password" class="w-full mb-5 p-3 border border-gray-300 rounded-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-500" />
+          <h2 class="text-2xl font-bold mb-4 text-slate-800 dark:text-slate-100">Admin Login</h2>
+          <input type="email" id="modal-email" autocomplete="username" placeholder="Email" class="input-field w-full mb-3 p-3" />
+          <input type="password" id="modal-password" autocomplete="current-password" placeholder="Password" class="input-field w-full mb-5 p-3" />
           <div class="flex justify-end gap-3">
-            <button id="modal-cancel" class="px-4 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-lg transition">Cancel</button>
-            <button id="modal-submit" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold transition shadow-md">Login</button>
+            <button type="button" id="modal-cancel" class="btn-ghost px-4 py-2">Cancel</button>
+            <button type="button" id="modal-submit" class="btn-primary px-4 py-2">Login</button>
           </div>
         `;
         
@@ -320,13 +487,9 @@ function setupAuthUI() {
 
 function switchAdminTab(tab) {
     currentAdminTab = tab;
-    document.querySelectorAll('.admin-tab').forEach(el => {
-        el.classList.remove('active', 'text-red-700', 'border-b-2', 'border-red-700');
-        el.classList.add('text-gray-500');
-    });
-    const activeTab = document.getElementById('admin-tab-' + tab);
-    activeTab.classList.remove('text-gray-500');
-    activeTab.classList.add('active', 'text-red-700', 'border-b-2', 'border-red-700');
+    // Active styling lives in .admin-tab.active (styles.css) — just flip the flag.
+    document.querySelectorAll('.admin-tab').forEach(el => el.classList.remove('active'));
+    document.getElementById('admin-tab-' + tab)?.classList.add('active');
 
     document.querySelectorAll('.admin-form').forEach(el => el.classList.add('hidden'));
     document.getElementById('admin-form-' + tab).classList.remove('hidden');
@@ -357,20 +520,20 @@ async function saveMaterial() {
     const category = document.getElementById('new-mat-cat').value;
     const stdFactor = parseFloat(document.getElementById('new-mat-factor').value) || null;
 
-    if(!name || !unitsPerPallet || !unitsPerCase) return alert("Fill all required fields!");
+    if(!name || !unitsPerPallet || !unitsPerCase) return toast('warning', 'Name, units/pallet and units/case are required');
     const materialData = { name, number, unitsPerPallet, unitsPerCase, desc: desc || name, category, stdCaseFactor: stdFactor, unitName: "Pallets" };
 
     try {
         if (editingId) await updateDoc(doc(db, "materials", editingId), materialData);
         else await addDoc(collection(db, "materials"), materialData);
         resetAdminForm();
-    } catch (e) { alert("Error saving material: " + e.message); }
+    } catch (e) { toast('error', 'Error saving material: ' + e.message); }
 }
 
 async function saveProduct() {
     const name = document.getElementById('new-prod-name').value;
     const type = document.getElementById('new-prod-type').value;
-    if(!name) return alert("Product name required!");
+    if(!name) return toast('warning', 'Product name is required');
 
     let productData = { name, type };
     if (type === 'can') {
@@ -384,20 +547,20 @@ async function saveProduct() {
         if (editingId) await updateDoc(doc(db, "products", editingId), productData);
         else await addDoc(collection(db, "products"), productData);
         resetAdminForm();
-    } catch (e) { alert("Error saving product: " + e.message); }
+    } catch (e) { toast('error', 'Error saving product: ' + e.message); }
 }
 
 async function saveQACode() {
     const name = document.getElementById('new-qa-name').value;
     const category = document.getElementById('new-qa-cat').value;
     const weeks = parseInt(document.getElementById('new-qa-weeks').value) || 0;
-    if(!name || !weeks) return alert("Fill all required fields!");
+    if(!name || !weeks) return toast('warning', 'Name and weeks are required');
 
     try {
         if (editingId) await updateDoc(doc(db, "qacodes", editingId), { name, category, weeks });
         else await addDoc(collection(db, "qacodes"), { name, category, weeks });
         resetAdminForm();
-    } catch (e) { alert("Error saving QA code: " + e.message); }
+    } catch (e) { toast('error', 'Error saving QA code: ' + e.message); }
 }
 
 function resetAdminForm() {
@@ -408,8 +571,7 @@ function resetAdminForm() {
         const btn = document.getElementById(`btn-save-${type}`);
         if(btn) {
             btn.innerText = `Save ${type.charAt(0).toUpperCase() + type.slice(1)}`;
-            btn.classList.replace('bg-yellow-600', 'bg-red-600');
-            btn.classList.replace('hover:bg-yellow-700', 'hover:bg-red-700');
+            btn.classList.remove('!bg-amber-600', 'hover:!bg-amber-700');
         }
     });
 
@@ -424,19 +586,22 @@ function renderAdminList() {
 
     let dbObj, idObj, displayFunc;
 
+    const strong = 'text-slate-900 dark:text-slate-100';
+    const meta = 'text-xs ml-1 whitespace-nowrap text-slate-500 dark:text-slate-400';
+
     if (currentAdminTab === 'materials') {
         dbObj = MATERIAL_DB; idObj = MATERIAL_IDS;
-        displayFunc = (item) => `<strong class="text-gray-900">${item.number ? `[${item.number}] ` : ''}${item.name}</strong> <span class="text-xs text-gray-500 ml-1 whitespace-nowrap">(${item.unitsPerPallet}/plt)</span>`;
+        displayFunc = (item) => `<strong class="${strong}">${item.number ? `[${item.number}] ` : ''}${item.name}</strong> <span class="${meta}">(${item.unitsPerPallet}/plt)</span>`;
     } else if (currentAdminTab === 'products') {
         dbObj = PRODUCT_DB; idObj = PRODUCT_IDS;
-        displayFunc = (item) => `<strong class="text-gray-900">${item.name}</strong> <span class="text-xs text-gray-500 ml-1 whitespace-nowrap">(${item.type.toUpperCase()})</span>`;
+        displayFunc = (item) => `<strong class="${strong}">${item.name}</strong> <span class="${meta}">(${item.type.toUpperCase()})</span>`;
     } else if (currentAdminTab === 'qacodes') {
         dbObj = QA_CODE_DB; idObj = QA_CODE_IDS;
-        displayFunc = (item) => `<strong class="text-gray-900">${item.name}</strong> <span class="text-xs text-gray-500 ml-1 whitespace-nowrap">(${item.weeks} wks, ${item.category})</span>`;
+        displayFunc = (item) => `<strong class="${strong}">${item.name}</strong> <span class="${meta}">(${item.weeks} wks, ${item.category})</span>`;
     }
 
-    const items = Object.keys(idObj).sort(); 
-    if (items.length === 0) return listContainer.innerHTML = '<div class="text-sm text-gray-500 italic p-2">No custom items in database yet. Try Migrating!</div>';
+    const items = Object.keys(idObj).sort();
+    if (items.length === 0) return listContainer.innerHTML = '<div class="text-sm italic p-2 text-slate-500 dark:text-slate-400">No custom items in database yet. Try Migrating!</div>';
 
     items.forEach(name => {
         const item = dbObj[name];
@@ -446,15 +611,15 @@ function renderAdminList() {
         const primaryId = docIds[0];
 
         const div = document.createElement('div');
-        div.className = "flex justify-between items-start bg-white text-slate-800 p-2 mb-2 rounded border border-gray-200 text-sm w-full";
+        div.className = "flex justify-between items-start p-2 mb-2 rounded-lg border text-sm w-full bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-700";
         div.innerHTML = `
             <div class="flex-1 min-w-0 pr-2">
                 <div class="whitespace-normal break-words leading-snug">${displayFunc(item)}</div>
-                ${docIds.length > 1 ? `<div class="text-xs text-red-600 font-bold mt-1 px-2 py-0.5 bg-red-100 rounded inline-block"><i class="fas fa-exclamation-triangle"></i> ${docIds.length} Copies Found (Delete to clear all)</div>` : ''}
+                ${docIds.length > 1 ? `<div class="text-xs font-bold mt-1 px-2 py-0.5 rounded inline-block text-brand-700 bg-brand-100 dark:text-brand-300 dark:bg-brand-500/15"><i class="fas fa-exclamation-triangle"></i> ${docIds.length} Copies Found (Delete to clear all)</div>` : ''}
             </div>
             <div class="flex gap-2 flex-shrink-0">
-                <button class="text-blue-500 hover:text-blue-700 hover:bg-blue-50 p-1 rounded transition edit-btn" data-id="${primaryId}" data-name="${name.replace(/"/g, '&quot;')}"><i class="fas fa-edit"></i></button>
-                <button class="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 rounded transition delete-btn" data-ids='${JSON.stringify(docIds)}'><i class="fas fa-trash-alt"></i></button>
+                <button type="button" aria-label="Edit" class="p-2 rounded transition-colors edit-btn text-blue-500 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-500/15" data-id="${primaryId}" data-name="${name.replace(/"/g, '&quot;')}"><i class="fas fa-edit"></i></button>
+                <button type="button" aria-label="Delete" class="p-2 rounded transition-colors delete-btn text-brand-500 hover:text-brand-700 hover:bg-brand-50 dark:hover:bg-brand-500/15" data-ids='${JSON.stringify(docIds)}'><i class="fas fa-trash-alt"></i></button>
             </div>`;
         listContainer.appendChild(div);
     });
@@ -475,7 +640,7 @@ function renderAdminList() {
             });
             
             if(result.isConfirmed) {
-                let colName = currentAdminTab === 'products' ? 'products' : (currentAdminTab === 'qacodes' ? 'qacodes' : 'materials');
+                const colName = { products: 'products', qacodes: 'qacodes' }[currentAdminTab] || 'materials';
                 try {
                     // Delete ALL duplicates of this item at the exact same time
                     for(const id of ids) {
@@ -529,13 +694,13 @@ function renderAdminList() {
 
             const saveBtn = document.getElementById(saveBtnId);
             saveBtn.innerText = "Update";
-            saveBtn.classList.replace('bg-red-600', 'bg-yellow-600');
-            saveBtn.classList.replace('hover:bg-red-700', 'hover:bg-yellow-700');
+            saveBtn.classList.add('!bg-amber-600', 'hover:!bg-amber-700');
 
             if (!saveBtn.nextElementSibling?.classList.contains('cancel-edit-btn')) {
                 const cancelBtn = document.createElement('button');
+                cancelBtn.type = "button";
                 cancelBtn.innerText = "Cancel";
-                cancelBtn.className = "cancel-edit-btn mt-2 bg-gray-500 text-white px-4 py-2 rounded font-bold hover:bg-gray-600 w-full shadow-md transition";
+                cancelBtn.className = "cancel-edit-btn mt-2 w-full px-4 py-2 rounded-lg font-bold text-white transition-colors bg-slate-500 hover:bg-slate-600";
                 cancelBtn.addEventListener('click', resetAdminForm);
                 saveBtn.parentNode.insertBefore(cancelBtn, saveBtn.nextSibling);
             }
@@ -545,6 +710,274 @@ function renderAdminList() {
 
 // --- CORE APP LOGIC ---
 document.addEventListener("DOMContentLoaded", init);
+
+// ============================================================
+// SEARCHABLE COMBOBOX
+// Wraps an existing <select>, which stays in the DOM as the single source of
+// truth. Every consumer keeps using `select.value` / `change` events, so none
+// of the calculation code had to change.
+// ============================================================
+function enhanceSelect(select) {
+  if (select.dataset.comboboxReady === 'true') return;
+  select.dataset.comboboxReady = 'true';
+
+  const wrapper = select.parentElement; // the .relative container
+  wrapper.classList.add('relative');
+
+  // Hide the native control (kept focusable-free but still form-accurate).
+  select.classList.add('sr-only');
+  select.setAttribute('tabindex', '-1');
+  select.setAttribute('aria-hidden', 'true');
+  // The decorative chevron belongs to the native select; drop it.
+  wrapper.querySelector('.pointer-events-none')?.remove();
+
+  const host = document.createElement('div');
+  host.className = 'relative';
+  host.innerHTML = `
+    <input type="text" role="combobox" autocomplete="off" spellcheck="false"
+           aria-expanded="false" aria-autocomplete="list"
+           class="select-field w-full cursor-text" />
+    <button type="button" tabindex="-1" aria-label="Show all options"
+            class="absolute inset-y-0 right-0 flex items-center px-4 text-slate-400 hover:text-brand-600 transition-colors">
+      <i class="fas fa-chevron-down text-xs" aria-hidden="true"></i>
+    </button>
+    <div class="combobox-panel hidden" role="listbox"></div>`;
+
+  wrapper.appendChild(host);
+
+  const input = host.querySelector('input');
+  const toggleBtn = host.querySelector('button');
+  const panel = host.querySelector('.combobox-panel');
+
+  input.placeholder = select.dataset.combobox || 'Search…';
+  if (select.id) input.id = `${select.id}-search`;
+  // Move the <label for="..."> onto the visible input.
+  document.querySelector(`label[for="${select.id}"]`)?.setAttribute('for', input.id);
+
+  let options = [];
+  let filtered = [];
+  let highlighted = -1;
+  let isOpen = false;
+
+  /** Read the current <option> set out of the native select. */
+  function readOptions() {
+    options = [];
+    Array.from(select.children).forEach((child) => {
+      if (child.tagName === 'OPTGROUP') {
+        Array.from(child.children).forEach((opt) => {
+          if (opt.value === '' || opt.disabled) return;
+          options.push({ value: opt.value, label: opt.textContent, group: child.label });
+        });
+      } else if (child.value !== '' && !child.disabled) {
+        options.push({ value: child.value, label: child.textContent, group: '' });
+      }
+    });
+  }
+
+  function selectedLabel() {
+    const match = options.find((o) => o.value === select.value);
+    return match ? match.label : '';
+  }
+
+  function render(term = '') {
+    const needle = term.trim().toLowerCase();
+    filtered = needle
+      ? options.filter((o) => o.label.toLowerCase().includes(needle))
+      : options.slice();
+
+    if (!filtered.length) {
+      panel.innerHTML = '<div class="combobox-empty">No matches</div>';
+      return;
+    }
+
+    let html = '';
+    let lastGroup = null;
+    filtered.forEach((opt, i) => {
+      if (opt.group && opt.group !== lastGroup) {
+        html += `<div class="combobox-group">${escapeHtml(opt.group)}</div>`;
+        lastGroup = opt.group;
+      }
+      const isSelected = opt.value === select.value;
+      html += `<div class="combobox-option${i === highlighted ? ' highlighted' : ''}" role="option"
+                    data-index="${i}" aria-selected="${isSelected}">${escapeHtml(opt.label)}</div>`;
+    });
+    panel.innerHTML = html;
+  }
+
+  function open() {
+    if (isOpen) return;
+    readOptions();
+    isOpen = true;
+    panel.classList.remove('hidden');
+    input.setAttribute('aria-expanded', 'true');
+    highlighted = filtered.findIndex((o) => o.value === select.value);
+    render(input.value === selectedLabel() ? '' : input.value);
+    scrollHighlightedIntoView();
+  }
+
+  function close() {
+    if (!isOpen) return;
+    isOpen = false;
+    panel.classList.add('hidden');
+    input.setAttribute('aria-expanded', 'false');
+    input.value = selectedLabel(); // discard any partial search text
+  }
+
+  function commit(index) {
+    const opt = filtered[index];
+    if (!opt) return;
+    select.value = opt.value;
+    input.value = opt.label;
+    close();
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function scrollHighlightedIntoView() {
+    panel.querySelector('.combobox-option.highlighted')
+      ?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function move(delta) {
+    if (!isOpen) return open();
+    if (!filtered.length) return;
+    highlighted = (highlighted + delta + filtered.length) % filtered.length;
+    render(input.value === selectedLabel() ? '' : input.value);
+    scrollHighlightedIntoView();
+  }
+
+  input.addEventListener('focus', () => {
+    open();
+    input.select();
+  });
+  input.addEventListener('input', () => {
+    if (!isOpen) open();
+    highlighted = 0;
+    render(input.value);
+  });
+  input.addEventListener('keydown', (e) => {
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); move(1); break;
+      case 'ArrowUp':   e.preventDefault(); move(-1); break;
+      case 'Enter':
+        if (isOpen && highlighted >= 0) { e.preventDefault(); commit(highlighted); }
+        break;
+      case 'Escape':
+        if (isOpen) { e.preventDefault(); close(); }
+        break;
+      case 'Tab': close(); break;
+    }
+  });
+
+  toggleBtn.addEventListener('click', () => {
+    if (isOpen) { close(); } else { input.focus(); }
+  });
+
+  panel.addEventListener('mousedown', (e) => {
+    // mousedown (not click) so the input's blur doesn't close the panel first.
+    const optionEl = e.target.closest('.combobox-option');
+    if (!optionEl) return;
+    e.preventDefault();
+    commit(parseInt(optionEl.dataset.index, 10));
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (isOpen && !host.contains(e.target)) close();
+  });
+
+  // Keep the visible input in sync when Firestore repopulates the select.
+  select._syncCombobox = () => {
+    readOptions();
+    input.value = selectedLabel();
+    if (isOpen) render(input.value);
+  };
+
+  readOptions();
+  input.value = selectedLabel();
+}
+
+/** Called after any code rebuilds a select's <option> list. */
+function syncComboboxes() {
+  document.querySelectorAll('select[data-combobox]').forEach((select) => {
+    if (typeof select._syncCombobox === 'function') select._syncCombobox();
+  });
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// ============================================================
+// SESSION PERSISTENCE
+// This is a shift tool that people reopen constantly — losing the SKU and the
+// numbers on every reload was the single most annoying thing about it.
+// ============================================================
+const SESSION_KEY = 'prodcalc.session.v1';
+const SESSION_FIELDS = [
+  'syrup-product', 'syrup-gals', 'syrup-plts', 'syrup-cases',
+  'syrup-actual-cases-1', 'syrup-actual-cases-2', 'syrup-actual-cases-3',
+  'syrup-pack-size-1', 'syrup-pack-size-2', 'syrup-pack-size-3',
+  'mat-select', 'mat-target', 'mat-onhand',
+  'datecode-product',
+];
+
+let sessionRestored = false;
+
+function saveSession() {
+  if (!sessionRestored) return; // don't persist the blank pre-restore state
+  try {
+    const data = {};
+    SESSION_FIELDS.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && el.value !== '') data[id] = el.value;
+    });
+    data.tab = currentActiveTab;
+    localStorage.setItem(SESSION_KEY, JSON.stringify(data));
+  } catch (e) { /* storage full or blocked — not worth interrupting the user */ }
+}
+
+function restoreSession() {
+  let data = null;
+  try {
+    data = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+  } catch (e) { /* corrupt entry, start fresh */ }
+
+  if (data) {
+    // Selects first, so the dependent calculations see the right SKU.
+    ['syrup-product', 'mat-select', 'datecode-product',
+     'syrup-pack-size-1', 'syrup-pack-size-2', 'syrup-pack-size-3'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && data[id] != null && Array.from(el.options).some((o) => o.value === data[id])) {
+        el.value = data[id];
+      }
+    });
+
+    ['syrup-gals', 'syrup-plts', 'syrup-cases', 'syrup-actual-cases-1',
+     'syrup-actual-cases-2', 'syrup-actual-cases-3', 'mat-target', 'mat-onhand'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && data[id] != null) el.value = data[id];
+    });
+
+    syncComboboxes();
+    updateSyrupProduct();
+    updateMaterial();
+    calculateDateCode();
+
+    if (data.tab && data.tab !== 'syrup') switchTab(data.tab);
+  }
+
+  sessionRestored = true;
+
+  // Persist on any edit, debounced so we aren't hammering localStorage per keystroke.
+  let saveTimer = null;
+  document.addEventListener('input', () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveSession, 300);
+  });
+  document.addEventListener('change', saveSession);
+  window.addEventListener('pagehide', saveSession);
+}
 
 function createBubble(container) {
   const bubble = document.createElement("div");
@@ -599,6 +1032,8 @@ function populateDropdowns() {
 
       if (currentMat && MATERIAL_DB[currentMat]) matSelect.value = currentMat;
   }
+
+  syncComboboxes();
 }
 
 function populateDateCodeDropdown() {
@@ -630,6 +1065,8 @@ function populateDateCodeDropdown() {
      const exists = Object.values(QA_CODE_DB).some(item => item.weeks.toString() === currentVal);
      if (exists) select.value = currentVal;
   }
+
+  syncComboboxes();
 }
 
 function calculateDateCode() {
@@ -668,31 +1105,23 @@ function calculateDateCode() {
 function switchTab(tab) {
   if (currentActiveTab === tab) return;
   currentActiveTab = tab;
-  
-  document.querySelectorAll(".tab-pane").forEach(el => {
+
+  // Instant swap — visibility and the fade are handled entirely in CSS, so
+  // rapid tab clicks can't strand a pane mid-transition.
+  document.querySelectorAll(".tab-pane").forEach(el => el.classList.remove("active"));
+  document.querySelectorAll(".nav-tab").forEach(el => {
     el.classList.remove("active");
-    setTimeout(() => {
-        if(!el.classList.contains("active")) el.classList.add("hidden");
-    }, 200); // Wait for fade out
+    el.setAttribute("aria-selected", "false");
   });
-  
-  document.querySelectorAll(".nav-tab").forEach(el => el.classList.remove("active"));
-  
-  setTimeout(() => {
-      const target = document.getElementById("content-" + tab);
-      target.classList.remove("hidden");
-      // Small delay to allow display block to apply before opacity transition
-      setTimeout(() => target.classList.add("active"), 10);
-  }, 200);
-  
-  document.getElementById("tab-" + tab).classList.add("active");
-  
-  // Auto-focus first input of the new tab
-  setTimeout(() => {
-      if (tab === 'syrup') document.getElementById('syrup-product')?.focus();
-      else if (tab === 'materials') document.getElementById('mat-select')?.focus();
-      else if (tab === 'datecode') document.getElementById('datecode-product')?.focus();
-  }, 250);
+
+  document.getElementById("content-" + tab)?.classList.add("active");
+  const tabBtn = document.getElementById("tab-" + tab);
+  if (tabBtn) {
+    tabBtn.classList.add("active");
+    tabBtn.setAttribute("aria-selected", "true");
+  }
+
+  saveSession();
 }
 
 function updateSyrupProduct() {
@@ -710,22 +1139,45 @@ function updateSyrupProduct() {
   currentSkuYields.casesPerGal = product.type === "bottle" ? product.factor : product.casesPerPallet / product.galPerPallet;
   currentSkuYields.casesPerPlt = product.type === "bottle" ? 0 : product.casesPerPallet;
 
-  calculateSyrup('cases'); 
+  // Re-derive the other fields for the new SKU. If per-line counts exist (a
+  // restored session, or a live Firestore update), recompute *from* them —
+  // going through the 'cases' path would wipe them as if the user had typed.
+  const hasActuals = [1, 2, 3].some(
+    (n) => document.getElementById(`syrup-actual-cases-${n}`)?.value.trim()
+  );
+  calculateSyrup(hasActuals ? 'packsize-refresh' : 'cases');
+
+  // Dim the whole card, not just the input wrapper, so "not applicable" reads clearly.
+  const pltsCard = pltsInput?.closest('.calc-card');
 
   if (product.type === "bottle") {
-    if (pltsInput) { pltsInput.disabled = true; pltsInput.parentElement.classList.add("opacity-50"); pltsInput.placeholder = "N/A"; }
-    if(infoBadge) {
-      infoBadge.innerText = `Type: Bottle | Conv Factor: ${product.factor}`; 
-      infoBadge.className = "mt-3 inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-black text-white";
+    if (pltsInput) {
+      pltsInput.disabled = true;
+      pltsInput.placeholder = "N/A";
+      // Clear it — a leftover can-pallet figure on a bottle SKU reads as real.
+      pltsInput.value = "";
+      pltsCard?.classList.add("opacity-50", "pointer-events-none");
+    }
+    if (infoBadge) {
+      infoBadge.innerText = `Bottle · conversion factor ${product.factor}`;
+      infoBadge.className = BADGE_NEUTRAL;
     }
   } else {
-    if (pltsInput) { pltsInput.disabled = false; pltsInput.parentElement.classList.remove("opacity-50"); pltsInput.placeholder = "0"; }
-    if(infoBadge) {
-      infoBadge.innerText = `Yield: ${currentSkuYields.casesPerGal.toFixed(2)} cs/gal | ${currentSkuYields.casesPerPlt.toFixed(2)} cs/plt`; 
-      infoBadge.className = "mt-3 inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-red-100 text-red-800";
+    if (pltsInput) {
+      pltsInput.disabled = false;
+      pltsInput.placeholder = "0";
+      pltsCard?.classList.remove("opacity-50", "pointer-events-none");
+    }
+    if (infoBadge) {
+      infoBadge.innerText = `Yield: ${fmt(currentSkuYields.casesPerGal)} cs/gal · ${fmt(currentSkuYields.casesPerPlt)} cs/plt`;
+      infoBadge.className = BADGE_BRAND;
     }
   }
 }
+
+const BADGE_BASE = "mt-3 inline-flex items-center px-3 py-1 rounded-full text-xs font-bold border";
+const BADGE_BRAND = `${BADGE_BASE} bg-brand-100 text-brand-800 border-brand-200 dark:bg-brand-500/15 dark:text-brand-200 dark:border-brand-800`;
+const BADGE_NEUTRAL = `${BADGE_BASE} bg-slate-800 text-white border-slate-700 dark:bg-slate-700 dark:border-slate-600`;
 
 // --- FULLY ADDITIVE 3-BOX MATH ENGINE ---
 function calculateSyrup(source) {
@@ -764,21 +1216,22 @@ function calculateSyrup(source) {
     try {
         val = new Function("return " + valStr.substring(1).replace(/[^0-9+\-*/(). ]/g, ""))();
     } catch(e) {
-        val = 0; 
+        val = 0;
     }
   } else if (!source.startsWith('packsize')) {
-    val = parseFloat(valStr) || 0;
+    val = parseLocaleNumber(valStr);
   }
 
   let stdCases = 0;
   let gals = 0;
   let plts = 0;
-  
-  let act1 = source === 'actual-1' ? val : (parseFloat(actual1El?.value) || 0);
-  let act2 = source === 'actual-2' ? val : (parseFloat(actual2El?.value) || 0);
-  let act3 = source === 'actual-3' ? val : (parseFloat(actual3El?.value) || 0);
 
-  const formatNum = (num) => (!num || isNaN(num) || !isFinite(num)) ? '' : (Number.isInteger(num) ? num.toString() : num.toFixed(2));
+  let act1 = source === 'actual-1' ? val : parseLocaleNumber(actual1El?.value || '');
+  let act2 = source === 'actual-2' ? val : parseLocaleNumber(actual2El?.value || '');
+  let act3 = source === 'actual-3' ? val : parseLocaleNumber(actual3El?.value || '');
+
+  // Blank rather than "0" for empty results, and thousands separators everywhere.
+  const formatNum = (num) => (!num || isNaN(num) || !isFinite(num)) ? '' : fmt(num);
 
   // IF TYPING IN ACTUAL CASES (A, B, or C) - SUM THEM TOGETHER
   if (source.startsWith('actual') || source.startsWith('packsize')) {
@@ -816,12 +1269,31 @@ function calculateSyrup(source) {
       if (galsEl && source !== 'gals') galsEl.value = formatNum(gals);
       if (pltsEl && product.type !== 'bottle' && source !== 'plts') pltsEl.value = formatNum(plts);
       if (casesEl && source !== 'cases') casesEl.value = formatNum(stdCases);
-      
-      // DO NOT AUTO-FILL BOX A ANYMORE. LEAVE THEM BLANK SO THE USER CAN CHOOSE.
-      if (actual1El) actual1El.value = "";
-      if (actual2El) actual2El.value = "";
-      if (actual3El) actual3El.value = "";
+
+      // Editing the top row invalidates any per-line counts, so clear them.
+      // Previously this happened silently and read as a bug — flash the cards
+      // that actually held a value so the wipe is visible and explained.
+      const hadValues = [actual1El, actual2El, actual3El].some(el => el && el.value.trim() !== "");
+
+      [actual1El, actual2El, actual3El].forEach((el) => {
+        if (!el) return;
+        const hadValue = el.value.trim() !== "";
+        el.value = "";
+        if (hadValue) flashWiped(el);
+      });
+
+      if (hadValues) announce("Line counts cleared because the totals were edited directly.");
   }
+}
+
+/** Brief highlight on a field that was auto-cleared, so the change is noticed. */
+function flashWiped(inputEl) {
+  if (prefersReducedMotion()) return;
+  const card = inputEl.closest('[data-actual-card]') || inputEl;
+  card.classList.remove('wipe-flash');
+  void card.offsetWidth; // restart the animation
+  card.classList.add('wipe-flash');
+  setTimeout(() => card.classList.remove('wipe-flash'), 800);
 }
 
 function clearSyrup() {
@@ -836,6 +1308,9 @@ function clearSyrup() {
   if(document.getElementById("syrup-actual-cases-1")) document.getElementById("syrup-actual-cases-1").value = "";
   if(document.getElementById("syrup-actual-cases-2")) document.getElementById("syrup-actual-cases-2").value = "";
   if(document.getElementById("syrup-actual-cases-3")) document.getElementById("syrup-actual-cases-3").value = "";
+
+  saveSession();
+  announce("Syrup calculation cleared");
 }
 
 function updateMaterial() {
@@ -848,69 +1323,134 @@ function updateMaterial() {
   const unitLabel = document.getElementById("mat-unit-label");
 
   if(!data) {
-     yieldEl.innerText = "-";
-     badge.innerText = "Select a material...";
-     badge.classList.remove("hidden");
+     yieldEl.innerText = "—";
+     badge.innerText = "Select a material…";
+     badge.className = BADGE_NEUTRAL;
      unitLabel.innerText = "Pallets/Rolls";
      calculateMaterial();
      return;
   }
-  
+
   const yieldVal = data.unitsPerPallet / data.unitsPerCase;
-  yieldEl.innerText = yieldVal.toLocaleString(undefined, { maximumFractionDigits: 2 }) + " Cases";
-  
+  yieldEl.innerText = fmt(yieldVal) + " Cases";
+
   const matNumberStr = data.number ? `[${data.number}] ` : "";
-  badge.innerText = data.boxesPerPallet 
-      ? `${matNumberStr}${data.desc} | Spec: ${data.boxesPerPallet} boxes × ${data.unitsPerBox} units = ${data.unitsPerPallet.toLocaleString()} total` 
-      : `${matNumberStr}${data.desc} | Spec: ${data.unitsPerPallet.toLocaleString()} total units/pallet`;
-  
+  badge.innerText = data.boxesPerPallet
+      ? `${matNumberStr}${data.desc} · ${data.boxesPerPallet} boxes × ${data.unitsPerBox} units = ${fmt(data.unitsPerPallet, { decimals: 0 })} total`
+      : `${matNumberStr}${data.desc} · ${fmt(data.unitsPerPallet, { decimals: 0 })} total units/pallet`;
+
   unitLabel.innerText = data.unitName || "Pallets";
-  badge.classList.remove("hidden");
-  
+  badge.className = BADGE_NEUTRAL;
+
   calculateMaterial(); // Triggers math engine so target updates instantly on live DB changes
 }
 
-function calculateMaterial() {
+/** Evaluate a field that may hold either a number or an `=` expression. */
+function readNumericField(id) {
+  const str = (document.getElementById(id)?.value || "").trim();
+  if (str.startsWith("=")) {
+    try {
+      return new Function("return " + str.substring(1).replace(/[^0-9+\-*/(). ]/g, ""))() || 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+  return parseLocaleNumber(str);
+}
+
+/**
+ * Materials maths, in both directions.
+ *   source 'target' — cases wanted  → material units needed
+ *   source 'onhand' — units in hand → cases producible
+ */
+function calculateMaterial(source = 'target') {
   const matSelect = document.getElementById("mat-select");
   if(!matSelect || !matSelect.value) return;
 
   const data = MATERIAL_DB[matSelect.value];
-  let targetStr = document.getElementById("mat-target").value.trim();
-  let target = 0;
-
-  if (targetStr.startsWith("=")) {
-    try {
-      target = new Function("return " + targetStr.substring(1).replace(/[^0-9+\-*/(). ]/g, ""))();
-    } catch(e) {
-      target = 0; 
-    }
-  } else {
-    target = parseFloat(targetStr);
-  }
-
+  const targetEl = document.getElementById("mat-target");
+  const onhandEl = document.getElementById("mat-onhand");
   const neededEl = document.getElementById("mat-needed");
-  if (data && !isNaN(target) && target > 0) {
-      const finalVal = target / (data.unitsPerPallet / data.unitsPerCase);
-      if(window.animateNumber) window.animateNumber(neededEl, finalVal);
-      else neededEl.innerText = finalVal.toFixed(2);
-  } else {
-      if(window.animateNumber) window.animateNumber(neededEl, 0);
-      else neededEl.innerText = "0.00";
+
+  // Cases produced per single unit of the material (pallet / roll / box / reel).
+  const casesPerUnit = data ? (data.unitsPerPallet / data.unitsPerCase) : 0;
+
+  let units = 0;
+
+  if (!data || !casesPerUnit || !isFinite(casesPerUnit)) {
+    if(window.animateNumber) window.animateNumber(neededEl, 0);
+    updatePullReadout(0, data);
+    return;
   }
+
+  if (source === 'onhand') {
+    units = readNumericField("mat-onhand");
+    const cases = units * casesPerUnit;
+    if (targetEl) targetEl.value = cases > 0 ? fmt(cases) : "";
+  } else {
+    const target = readNumericField("mat-target");
+    units = target > 0 ? target / casesPerUnit : 0;
+    if (onhandEl) onhandEl.value = units > 0 ? fmt(units) : "";
+  }
+
+  if(window.animateNumber) window.animateNumber(neededEl, units);
+  else neededEl.innerText = fmt(units);
+
+  updatePullReadout(units, data);
+}
+
+/**
+ * Fractional units aren't pullable — surface the whole number an operator
+ * actually acts on, plus how much of the last one gets used.
+ */
+function updatePullReadout(units, data) {
+  const wrap = document.getElementById("mat-pull");
+  const valueEl = document.getElementById("mat-pull-value");
+  const noteEl = document.getElementById("mat-pull-note");
+  if (!wrap || !valueEl || !noteEl) return;
+
+  if (!units || units <= 0 || !isFinite(units)) {
+    wrap.classList.add("hidden");
+    valueEl.innerText = "—";
+    noteEl.innerText = "";
+    return;
+  }
+
+  const unitName = (data && data.unitName) || "Pallets";
+  const whole = Math.ceil(units - 1e-9); // tolerate float dust on exact figures
+  const remainder = whole - units;
+  const lastUsedPct = Math.round((1 - remainder) * 100);
+
+  // Singularise "Pallets" → "Pallet" when pulling exactly one.
+  const label = whole === 1 && unitName.endsWith("s") ? unitName.slice(0, -1) : unitName;
+
+  wrap.classList.remove("hidden");
+  valueEl.innerText = `${fmt(whole, { decimals: 0 })} ${label}`;
+  noteEl.innerText = remainder < 1e-6
+    ? "Exactly full — no partial unit."
+    : `${lastUsedPct}% of the last one used.`;
 }
 
 function clearMaterial() {
-  document.getElementById("mat-target").value = ""; 
+  const targetEl = document.getElementById("mat-target");
+  const onhandEl = document.getElementById("mat-onhand");
+  if (targetEl) targetEl.value = "";
+  if (onhandEl) onhandEl.value = "";
+
   const neededEl = document.getElementById("mat-needed");
   if(window.animateNumber) window.animateNumber(neededEl, 0);
   else neededEl.innerText = "0.00";
+  updatePullReadout(0, null);
+
+  saveSession();
+  announce("Material calculation cleared");
 }
 
 function handleMath(el, callback) {
   if (el.value.trim().startsWith("=")) {
     try {
       const result = new Function("return " + el.value.substring(1).replace(/[^0-9+\-*/(). ]/g, ""))();
-      if (isFinite(result)) { el.value = Math.round(result * 100) / 100; if (callback) callback(); }
+      if (isFinite(result)) { el.value = fmt(Math.round(result * 100) / 100); if (callback) callback(); }
     } catch (e) {}
   } else { if (callback) callback(); }
 }
@@ -938,68 +1478,243 @@ const animationStates = new Map();
 window.animateNumber = function(el, endVal, duration = 400) {
     if(!el) return;
     const end = parseFloat(endVal) || 0;
-    
-    if (animationStates.has(el.id)) {
-        cancelAnimationFrame(animationStates.get(el.id));
+    const key = el.id;
+
+    const prev = animationStates.get(key);
+    if (prev) {
+        cancelAnimationFrame(prev.raf);
+        clearTimeout(prev.safety);
+        animationStates.delete(key);
     }
-    
-    let currentText = el.innerText.replace(/[^0-9.-]/g, '');
-    let start = parseFloat(currentText);
+
+    // Fixed 2 decimals + tabular-nums (see .tnum in styles.css) keeps the
+    // readout from changing width on every animation frame.
+    const show = (n) => n.toLocaleString(undefined, {
+        minimumFractionDigits: 2, maximumFractionDigits: 2
+    });
+
+    let start = parseFloat(el.innerText.replace(/[^0-9.-]/g, ''));
     if(isNaN(start)) start = 0;
-    
-    if (start === end) {
-        el.innerText = end.toFixed(2);
+
+    if (start === end || prefersReducedMotion()) {
+        el.innerText = show(end);
         return;
     }
+
+    // requestAnimationFrame is paused in backgrounded or occluded tabs. Without
+    // a fallback the readout would be stranded on an interpolated value that
+    // still looks like a real answer — worse than no animation at all. This
+    // timer guarantees the final number lands even if no frame ever runs.
+    const safety = setTimeout(() => {
+        const s = animationStates.get(key);
+        if (s) cancelAnimationFrame(s.raf);
+        animationStates.delete(key);
+        el.innerText = show(end);
+    }, duration + 150);
 
     let startTime = null;
     const step = (timestamp) => {
         if (!startTime) startTime = timestamp;
         const progress = Math.min((timestamp - startTime) / duration, 1);
         const easeProgress = 1 - Math.pow(1 - progress, 4); // easeOutQuart
-        const current = start + (end - start) * easeProgress;
-        
-        el.innerText = current.toFixed(2);
-        
+
+        el.innerText = show(start + (end - start) * easeProgress);
+
         if (progress < 1) {
-            animationStates.set(el.id, requestAnimationFrame(step));
+            const s = animationStates.get(key);
+            if (s) s.raf = requestAnimationFrame(step);
         } else {
-            animationStates.delete(el.id);
+            clearTimeout(safety);
+            animationStates.delete(key);
         }
     };
-    animationStates.set(el.id, requestAnimationFrame(step));
+
+    animationStates.set(key, { raf: requestAnimationFrame(step), safety });
 };
 
-// --- DARK MODE TOGGLE ---
+// --- THEME ---
+// The `.dark` class lives on <html> (set by the inline script in index.html
+// before first paint) and drives every Tailwind `dark:` variant. No stylesheet
+// overrides, no `!important`.
 const themeToggle = document.getElementById('theme-toggle');
 const themeIcon = document.getElementById('theme-toggle-icon');
+const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 
 function applyTheme(isDark) {
-    if(isDark) {
-        document.body.classList.add('dark-mode');
-        if(themeIcon) { themeIcon.classList.remove('fa-moon'); themeIcon.classList.add('fa-sun'); }
-    } else {
-        document.body.classList.remove('dark-mode');
-        if(themeIcon) { themeIcon.classList.remove('fa-sun'); themeIcon.classList.add('fa-moon'); }
+    document.documentElement.classList.toggle('dark', isDark);
+    if (themeIcon) {
+        // Show the action, not the state: a sun means "switch to light".
+        themeIcon.classList.toggle('fa-sun', isDark);
+        themeIcon.classList.toggle('fa-moon', !isDark);
+    }
+    if (themeToggle) {
+        const next = isDark ? 'light' : 'dark';
+        themeToggle.setAttribute('aria-label', `Switch to ${next} theme`);
+        themeToggle.setAttribute('title', `Switch to ${next} theme`);
     }
 }
 
-if(themeToggle) {
+applyTheme(document.documentElement.classList.contains('dark'));
+
+if (themeToggle) {
     themeToggle.addEventListener('click', () => {
-        const isDark = !document.body.classList.contains('dark-mode');
-        localStorage.setItem('darkMode', isDark ? 'enabled' : 'disabled');
+        const isDark = !document.documentElement.classList.contains('dark');
+        localStorage.setItem('theme', isDark ? 'dark' : 'light');
         applyTheme(isDark);
     });
-    
-    // Initial Load
-    if(localStorage.getItem('darkMode') === 'enabled') {
-        applyTheme(true);
-    }
+}
+
+// Follow the OS until the user makes an explicit choice.
+systemDark.addEventListener('change', (e) => {
+    if (!localStorage.getItem('theme')) applyTheme(e.matches);
+});
+
+// One-time migration off the old localStorage key.
+if (localStorage.getItem('darkMode') && !localStorage.getItem('theme')) {
+    const wasDark = localStorage.getItem('darkMode') === 'enabled';
+    localStorage.setItem('theme', wasDark ? 'dark' : 'light');
+    localStorage.removeItem('darkMode');
+    applyTheme(wasDark);
 }
 
 // Keyboard Shortcuts
 document.addEventListener('keydown', (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+
     if (e.altKey && e.key === '1') { e.preventDefault(); switchTab('syrup'); }
     else if (e.altKey && e.key === '2') { e.preventDefault(); switchTab('materials'); }
     else if (e.altKey && e.key === '3') { e.preventDefault(); switchTab('datecode'); }
+    else if (e.key === '?' && !typing) { e.preventDefault(); window.showHelpModal(); }
+    else if (e.key === '/' && !typing) {
+        // Jump straight to the search box of the visible tab.
+        e.preventDefault();
+        const map = { syrup: 'syrup-product', materials: 'mat-select', datecode: 'datecode-product' };
+        document.getElementById(`${map[currentActiveTab]}-search`)?.focus();
+    }
+});
+
+// Help & Guide Modal
+window.showHelpModal = function() {
+    Swal.fire({
+        title: '<i class="fas fa-book-open text-red-600 mr-2"></i> Application Guide',
+        width: '700px',
+        showCloseButton: true,
+        showConfirmButton: false,
+        customClass: {
+            container: 'help-modal-container',
+            title: 'text-2xl font-black border-b pb-4 mb-4 text-left w-full',
+            htmlContainer: 'text-left'
+        },
+        html: `
+<div class="space-y-6 max-h-[60vh] overflow-y-auto pr-2 text-slate-700 dark:text-slate-200">
+
+  <!-- Shortcuts -->
+  <div>
+    <h3 class="font-bold text-lg border-b border-slate-200 dark:border-slate-600 pb-2 mb-3"><i class="fas fa-keyboard text-brand-600 mr-2"></i> Shortcuts</h3>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+      ${[
+        ['Alt + 1 / 2 / 3', 'Switch between tabs'],
+        ['/', 'Focus the search box'],
+        ['?', 'Open this guide'],
+        ['=12*24/30', 'Inline math in any number field'],
+      ].map(([key, desc]) => `
+        <div class="flex items-center gap-2">
+          <kbd class="px-2 py-1 rounded border font-mono text-xs font-bold bg-slate-100 border-slate-300 dark:bg-slate-700 dark:border-slate-600">${key}</kbd>
+          <span class="text-slate-600 dark:text-slate-300">${desc}</span>
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <!-- Case Baseline -->
+  <div>
+    <h3 class="font-bold text-lg border-b border-slate-200 dark:border-slate-600 pb-2 mb-3"><i class="fas fa-boxes-stacked text-blue-600 mr-2"></i> Standard 24-Pack Baseline</h3>
+    <p class="text-sm leading-relaxed">
+      The facility tracks total production volume using a standard 24-pack as the baseline unit. Whenever a different package size runs, a conversion multiplier is applied so physical inventory aligns with system records.
+    </p>
+    <p class="text-sm leading-relaxed mt-2">
+      A <strong>35-pack</strong> ÷ 24 yields <strong>1.4583…</strong>, so every physical 35-pack is recorded as roughly <strong>1.46</strong> standard cases. An <strong>18-pack</strong> ÷ 24 yields exactly <strong>0.75</strong>, so each 18-pack counts as three-quarters of a case. This is what makes the totals reconcile at the end of a shift.
+    </p>
+  </div>
+
+  <!-- Product Tank Accounting -->
+  <div class="rounded-lg p-4 text-sm border bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-500/10 dark:border-amber-700/60 dark:text-amber-100">
+    <div class="flex items-start">
+      <i class="fas fa-circle-exclamation mt-1 mr-3 text-amber-600 dark:text-amber-400 text-lg"></i>
+      <div>
+        <strong class="block mb-1 font-bold uppercase tracking-wide">Product Tank Accounting</strong>
+        <p class="leading-relaxed">
+          Remember to account for the product tank — typically <strong>2–4 pallets</strong>, depending on tank size and gallon type (Regular vs. QS).
+        </p>
+        <p class="mt-2 leading-relaxed italic">
+          Example (Line 7): add 2 pallets for regular gallons. If running QS, add <strong>4 pallets total</strong> (2× multiplier). So call "last 4" for QS and "last 2" for regular. Add these to the total syrup count for the whole run. Tank sizes vary by line.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Calculator behaviour -->
+  <div class="flex items-start gap-3 text-sm rounded-lg p-4 border bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-600">
+    <i class="fas fa-lightbulb text-amber-500 mt-1 text-lg"></i>
+    <div class="space-y-2">
+      <p><strong>Fields are bi-directional.</strong> Type into any of Gallons, Can Bodies, or Standard Cases and the others follow.</p>
+      <p><strong>Line A/B/C add up.</strong> They sum into Standard Cases. Editing the top row clears them, because per-line counts no longer match the new total.</p>
+      <p><strong>Your work is saved.</strong> The SKU and numbers are restored the next time you open the app.</p>
+    </div>
+  </div>
+
+</div>
+        `
+    });
+};
+
+// ─── PWA Install Prompt ─────────────────────────────────────────
+let deferredPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+
+    // Don't show if user dismissed recently (within 7 days)
+    const dismissed = localStorage.getItem('pwa-dismissed');
+    if (dismissed && Date.now() - parseInt(dismissed) < 7 * 24 * 60 * 60 * 1000) return;
+
+    // Show the banner with a slight delay for better UX
+    setTimeout(() => {
+        const banner = document.getElementById('pwa-install-banner');
+        if (banner) banner.classList.remove('translate-y-full');
+    }, 2000);
+});
+
+// Install button
+document.getElementById('pwa-install')?.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+        const banner = document.getElementById('pwa-install-banner');
+        if (banner) banner.classList.add('translate-y-full');
+        Swal.fire({
+            icon: 'success',
+            title: 'App Installed!',
+            text: 'Production Calculator has been added to your device.',
+            timer: 3000,
+            showConfirmButton: false
+        });
+    }
+    deferredPrompt = null;
+});
+
+// Dismiss button
+document.getElementById('pwa-dismiss')?.addEventListener('click', () => {
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) banner.classList.add('translate-y-full');
+    localStorage.setItem('pwa-dismissed', Date.now().toString());
+    deferredPrompt = null;
+});
+
+// Hide banner if app is already installed
+window.addEventListener('appinstalled', () => {
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) banner.classList.add('translate-y-full');
+    deferredPrompt = null;
 });

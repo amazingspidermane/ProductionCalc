@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build)",
+      "Bash(npm run dev)",
+      "Bash(npm run preview)",
+      "PowerShell(npm run build)",
+      "PowerShell(npm run dev)",
+      "PowerShell(npm run preview)",
+      "Bash(npm ls *)",
+      "Bash(npm outdated *)",
+      "Bash(firebase login:list)",
+      "Bash(firebase projects:list)",
+      "Bash(firebase hosting:sites:list)",
+      "Bash(firebase hosting:channel:list *)",
+      "Bash(firebase target *)",
+      "PowerShell(firebase login:list)",
+      "PowerShell(firebase projects:list)",
+      "PowerShell(firebase hosting:sites:list)",
+      "mcp__claude-in-chrome__tabs_context_mcp",
+      "mcp__claude-in-chrome__tabs_create_mcp",
+      "mcp__claude-in-chrome__read_page",
+      "mcp__claude-in-chrome__get_page_text",
+      "mcp__claude-in-chrome__read_console_messages",
+      "mcp__claude-in-chrome__read_network_requests",
+      "mcp__claude-in-chrome__find",
+      "mcp__claude-in-chrome__list_connected_browsers",
+      "mcp__claude-in-chrome__resize_window"
+    ]
+  }
+}
