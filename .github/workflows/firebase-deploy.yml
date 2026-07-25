@@ -1,0 +1,82 @@
+name: Deploy to production
+
+# Deliberately NOT automatic on merge.
+#
+# This app tells people how much syrup to make and how many pallets to pull. A
+# wrong pack size silently halves a syrup order, and there is no one at a desk
+# to notice if a change made from a phone goes straight to the floor. So merging
+# is safe and reversible; shipping is a separate, deliberate act.
+#
+# To deploy: Actions -> "Deploy to production" -> Run workflow. That button
+# works from the GitHub mobile app and from a phone browser.
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_rules:
+        description: 'Also deploy firestore.rules (changes who can write data)'
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # A missing VITE_FIREBASE_* only produces a console warning at runtime, so
+      # without this check an unset secret would build and ship an app that
+      # silently cannot reach the database. Fail loudly instead.
+      - name: Check build secrets are present
+        env:
+          KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          PROJECT: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+        run: |
+          if [ -z "$KEY" ] || [ -z "$PROJECT" ]; then
+            echo "::error::VITE_FIREBASE_* repo secrets are not set. Refusing to deploy an app that cannot reach Firebase."
+            exit 1
+          fi
+
+      # Tests gate the deploy. If the run-plan maths regressed, this stops here
+      # rather than on the plant floor.
+      - run: npm test
+
+      - run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}
+
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: productioncalc-bbd66
+          channelId: live
+
+      # Rules are opt-in per run. They govern who can write the conversion
+      # factors every device reads, so they should never ride along unnoticed
+      # with a UI change.
+      - name: Deploy Firestore rules
+        if: ${{ inputs.deploy_rules }}
+        env:
+          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          # printf, not echo, so the JSON reaches the file byte for byte.
+          printf '%s' "$FIREBASE_SA" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          npx --yes firebase-tools@latest deploy --only firestore:rules --project productioncalc-bbd66
+          rm -f "$RUNNER_TEMP/sa.json"
+
+      - name: Summary
+        run: echo "Deployed to https://productioncalc-bbd66.web.app" >> "$GITHUB_STEP_SUMMARY"
