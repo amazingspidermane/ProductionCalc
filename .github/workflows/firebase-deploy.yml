@@ -60,17 +60,23 @@ jobs:
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PRODUCTIONCALC_BBD66 }}
           projectId: productioncalc-bbd66
           channelId: live
 
       # Rules are opt-in per run. They govern who can write the conversion
       # factors every device reads, so they should never ride along unnoticed
       # with a UI change.
+      #
+      # NOTE: `firebase init hosting:github` grants the service account Hosting
+      # admin only, so this step will fail with a permissions error until the
+      # account is also given "Firebase Rules Admin" in Google Cloud IAM. Until
+      # then, deploy rules from a workstation with `firebase deploy --only
+      # firestore:rules`. Hosting deploys above are unaffected.
       - name: Deploy Firestore rules
         if: ${{ inputs.deploy_rules }}
         env:
-          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PRODUCTIONCALC_BBD66 }}
         run: |
           # printf, not echo, so the JSON reaches the file byte for byte.
           printf '%s' "$FIREBASE_SA" > "$RUNNER_TEMP/sa.json"
