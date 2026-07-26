@@ -215,6 +215,15 @@ export function materialUnitsForStandardCases(material, stdCases) {
 }
 
 /**
+ * Standard 24-cases producible from a quantity of material on hand.
+ * The inverse of materialUnitsForStandardCases().
+ */
+export function standardCasesFromMaterialUnits(material, units) {
+  if (!material || !(units > 0)) return 0;
+  return casesFromMaterialUnits(material, units) * packFactorOf(material);
+}
+
+/**
  * Everything a run needs: syrup volume plus every material to pull.
  *
  * A run is rarely one pack size. 10,000 35-packs plus 2,000 18-packs plus

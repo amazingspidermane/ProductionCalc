@@ -21,6 +21,7 @@ import {
   formatMaterialList,
   packFactorOf,
   materialUnitsForStandardCases,
+  standardCasesFromMaterialUnits,
   buildRunPlan,
 } from './calc.js';
 
@@ -701,5 +702,46 @@ describe('productionDateFromCode', () => {
     expect(productionDateFromCode(REAL, 0)).toBeNull();
     expect(productionDateFromCode(REAL, NaN)).toBeNull();
     expect(productionDateFromCode(REAL, undefined)).toBeNull();
+  });
+});
+
+describe('standardCasesFromMaterialUnits', () => {
+  it('is the inverse of materialUnitsForStandardCases', () => {
+    for (const m of [TRAY_24PK, TRAY_35PK, WRAPS_12PK, CAPS_BOX]) {
+      const units = materialUnitsForStandardCases(m, 5000);
+      expect(standardCasesFromMaterialUnits(m, units)).toBeCloseTo(5000, 6);
+    }
+  });
+
+  // One pallet of 35-packs covers more standard cases than its raw case count,
+  // because each physical tray is 35/24 of a standard case.
+  it('accounts for an oversized pack', () => {
+    expect(standardCasesFromMaterialUnits(TRAY_35PK, 1)).toBeCloseTo(1600 * 35 / 24, 4);
+  });
+
+  it('matches the plain conversion when the pack is already 24', () => {
+    expect(standardCasesFromMaterialUnits(TRAY_24PK, 12))
+      .toBeCloseTo(casesFromMaterialUnits(TRAY_24PK, 12), 9);
+  });
+
+  it('returns 0 for missing material or non-positive units', () => {
+    expect(standardCasesFromMaterialUnits(null, 5)).toBe(0);
+    expect(standardCasesFromMaterialUnits(TRAY_24PK, 0)).toBe(0);
+    expect(standardCasesFromMaterialUnits(TRAY_24PK, -3)).toBe(0);
+  });
+});
+
+// The Materials tab and the Run Plan must not disagree about the same material.
+describe('Materials tab and Run Plan agree', () => {
+  it('gives the same pull for the same standard-case target', () => {
+    const plan = buildRunPlan({
+      product: CAN_12OZ,
+      lines: [{ count: 5000, packSize: 24, materials: ['Film35'] }],
+      materialsDb: { Film35: TRAY_35PK },
+    });
+    // 5,000 standard cases entered on the Materials tab must produce the same
+    // figure the Run Plan reports for a 5,000 standard-case run.
+    expect(materialUnitsForStandardCases(TRAY_35PK, 5000))
+      .toBeCloseTo(plan.materials[0].units, 9);
   });
 });

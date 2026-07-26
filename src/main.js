@@ -16,6 +16,9 @@ import {
   casesPerMaterialUnit,
   materialUnitsForCases,
   casesFromMaterialUnits,
+  packFactorOf,
+  materialUnitsForStandardCases,
+  standardCasesFromMaterialUnits,
   unitsToPull,
   optimumTasteDate,
   parsePrintCode,
@@ -1840,13 +1843,21 @@ function updateMaterial() {
      return;
   }
 
-  const yieldVal = data.unitsPerPallet / data.unitsPerCase;
+  // Yield in standard 24-cases, so it lines up with the Syrup tab and the Run
+  // Plan. For a 35-pack tray that is more than its raw case count, because each
+  // physical tray covers 35/24 of a standard case.
+  const factor = packFactorOf(data);
+  const yieldVal = casesPerMaterialUnit(data) * factor;
   yieldEl.innerText = fmt(yieldVal) + " Cases";
 
   const matNumberStr = data.number ? `[${data.number}] ` : "";
+  // Only worth saying when the material isn't already on a 24 baseline.
+  const packNote = factor !== 1
+      ? ` · ${fmt(factor)}× pack factor applied`
+      : "";
   badge.innerText = data.boxesPerPallet
-      ? `${matNumberStr}${data.desc} · ${data.boxesPerPallet} boxes × ${data.unitsPerBox} units = ${fmt(data.unitsPerPallet, { decimals: 0 })} total`
-      : `${matNumberStr}${data.desc} · ${fmt(data.unitsPerPallet, { decimals: 0 })} total units/pallet`;
+      ? `${matNumberStr}${data.desc} · ${data.boxesPerPallet} boxes × ${data.unitsPerBox} units = ${fmt(data.unitsPerPallet, { decimals: 0 })} total${packNote}`
+      : `${matNumberStr}${data.desc} · ${fmt(data.unitsPerPallet, { decimals: 0 })} total units/pallet${packNote}`;
 
   unitLabel.innerText = data.unitName || "Pallets";
   badge.className = BADGE_NEUTRAL;
@@ -1882,12 +1893,15 @@ function calculateMaterial(source = 'target') {
     return;
   }
 
+  // Both directions work in standard 24-cases, matching the Syrup tab and the
+  // Run Plan. For a material whose pack isn't 24 — the 30 and 35-pack film
+  // trays — stdCaseFactor is what keeps this screen from over-pulling.
   if (source === 'onhand') {
     units = readNumericField("mat-onhand");
-    const cases = casesFromMaterialUnits(data, units);
+    const cases = standardCasesFromMaterialUnits(data, units);
     if (targetEl) targetEl.value = cases > 0 ? fmt(cases) : "";
   } else {
-    units = materialUnitsForCases(data, readNumericField("mat-target"));
+    units = materialUnitsForStandardCases(data, readNumericField("mat-target"));
     if (onhandEl) onhandEl.value = units > 0 ? fmt(units) : "";
   }
 
