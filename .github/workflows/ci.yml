@@ -18,7 +18,13 @@ jobs:
           node-version: 20
           cache: npm
 
-      - run: npm ci
+      # npm install, not npm ci. The lockfile is generated on Windows, and npm
+      # resolves the @emnapi packages under @rolldown/binding-wasm32-wasi
+      # differently on Linux, so `npm ci` -- which requires the installed tree to
+      # match the lockfile exactly -- fails on the runner. npm install resolves
+      # for the platform it runs on. Slightly less reproducible; the test suite
+      # is what actually pins behaviour here.
+      - run: npm install --no-audit --no-fund
 
       - run: npm test
 
