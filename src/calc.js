@@ -400,3 +400,120 @@ export function productionDateFromCode(code, weeks) {
     weeks: w,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Water line (Dasani) — salts tank
+// ---------------------------------------------------------------------------
+
+/**
+ * Case output for the water line, from the two numbers an operator can read
+ * straight off the floor: batches made, and salts tank %.
+ *
+ * Source: batch sheet Fm-268-DD (Dasani Refresh, Formula WA/M-219.0).
+ *
+ * The sheet's "Yield (gals.) 20" field is not gallons -- it is the mineral
+ * concentration a 50-unit batch produces, ~20%. That is what makes the whole
+ * thing divide cleanly: one batch is 20%, so 1% is a twentieth of the batch's
+ * case count. For 20oz that is 7,000 / 20 = 350 cases per 1%.
+ *
+ * This supersedes an earlier reading based on watching SALTS TK 2 move
+ * 5.8% -> 22.0% (16.2%) on one batch. 20 is the specified figure; 16.2 was a
+ * single observation, and the notes already flag the tank transmitters as
+ * suspect. Using 20 also estimates fewer cases at a given reading, which is
+ * the safe direction for a runout.
+ *
+ * IMPORTANT: `cases` here means cases in the size's own pack configuration --
+ * 1.5L runs 12pk only, the others 24pk. These are NOT the app's standard
+ * 24-cases and must not be added to Syrup or Run Plan totals without
+ * converting.
+ */
+
+/** Fixed batch increment on the HMI (Batch Tank 1 & 2 Ops). */
+export const WATER_BATCH_UNITS = 50;
+
+/**
+ * Mineral concentration produced by one 50-unit batch, from the batch sheet's
+ * Yield field. The denominator behind every cases-per-1% figure below.
+ */
+export const WATER_PCT_PER_BATCH = 20;
+
+/**
+ * Per size: cases from one 50-unit batch, and the pack it runs as.
+ *
+ * casesPerBatch is read straight off the batch sheet, which groups 0.5L and 1L
+ * on one line at 8,300 -- consistent with both sharing a conversion factor in
+ * DEFAULT_PRODUCTS. Cases per 1% is derived rather than stored, so the two can
+ * never drift apart.
+ *
+ * `packSize` is not on the sheet, which lists sizes only. 1.5L is confirmed
+ * 12pk and is never run as 24pk.
+ */
+export const WATER_SIZES = {
+  "12oz / 24pk":      { casesPerBatch: 11700, packSize: 24 },
+  "20oz / 24pk":      { casesPerBatch: 7000,  packSize: 24 },
+  "0.5L / 1L / 24pk": { casesPerBatch: 8300,  packSize: 24 },
+  "1.5L / 12pk":      { casesPerBatch: 5550,  packSize: 12 },
+};
+
+/** Cases produced per 1% of mineral concentration, for one size. */
+export function casesPerPctFor(size) {
+  const s = WATER_SIZES[size];
+  return s ? s.casesPerBatch / WATER_PCT_PER_BATCH : 0;
+}
+
+/**
+ * Cases still available at a given tank level.
+ *
+ * Rounded DOWN. The four case counts on the batch sheet back-solve to finished
+ * volumes spanning ~0.5%, so these are planning figures, not exact. Rounding
+ * down means a runout estimate never promises cases that aren't there.
+ */
+export function casesFromTankLevel(size, levelPct) {
+  const s = WATER_SIZES[size];
+  if (!s || !(levelPct > 0)) return 0;
+  return Math.floor(levelPct * casesPerPctFor(size));
+}
+
+/**
+ * Tank level needed to cover a case target.
+ * Exact value; the UI rounds up for display, since a shortfall means a runout.
+ */
+export function tankLevelForCases(size, cases) {
+  const s = WATER_SIZES[size];
+  if (!s || !(cases > 0)) return 0;
+  return cases / casesPerPctFor(size);
+}
+
+/**
+ * Batches needed for a case target.
+ * Batches are made in whole 50-unit increments, so this rounds UP -- with the
+ * same float-dust tolerance unitsToPull() uses, so an exact 2.0 doesn't ask
+ * for a third.
+ */
+export function batchesForCases(size, cases) {
+  const s = WATER_SIZES[size];
+  if (!s || !(cases > 0)) return null;
+  const exact = cases / s.casesPerBatch;
+  return {
+    exact,
+    whole: Math.ceil(exact - 1e-9),
+  };
+}
+
+/** Everything the water tab shows for one size. */
+export function waterPlan(size, { levelPct, targetCases } = {}) {
+  const s = WATER_SIZES[size];
+  if (!s) return null;
+
+  return {
+    size,
+    packSize: s.packSize,
+    casesPerBatch: s.casesPerBatch,
+    casesPerPct: casesPerPctFor(size),
+    // From tank level: what's left.
+    available: casesFromTankLevel(size, levelPct),
+    // From a target: what it takes.
+    levelNeeded: tankLevelForCases(size, targetCases),
+    batches: batchesForCases(size, targetCases),
+  };
+}

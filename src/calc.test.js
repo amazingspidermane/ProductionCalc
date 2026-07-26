@@ -23,6 +23,14 @@ import {
   materialUnitsForStandardCases,
   standardCasesFromMaterialUnits,
   buildRunPlan,
+  WATER_SIZES,
+  WATER_BATCH_UNITS,
+  WATER_PCT_PER_BATCH,
+  casesFromTankLevel,
+  tankLevelForCases,
+  batchesForCases,
+  waterPlan,
+  casesPerPctFor,
 } from './calc.js';
 
 // Fixtures mirroring real entries from the Firestore data.
@@ -743,5 +751,146 @@ describe('Materials tab and Run Plan agree', () => {
     // figure the Run Plan reports for a 5,000 standard-case run.
     expect(materialUnitsForStandardCases(TRAY_35PK, 5000))
       .toBeCloseTo(plan.materials[0].units, 9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Water line (Dasani) — salts tank
+// ---------------------------------------------------------------------------
+
+
+describe('water line constants', () => {
+  it('uses the fixed 50-unit batch increment', () => {
+    expect(WATER_BATCH_UNITS).toBe(50);
+  });
+
+  // The batch sheet's "Yield (gals.) 20" is mineral concentration, not gallons:
+  // one 50-unit batch produces ~20%. That is the denominator behind every
+  // cases-per-1% figure, and it is why they divide cleanly.
+  it('treats one batch as 20% concentration', () => {
+    expect(WATER_PCT_PER_BATCH).toBe(20);
+  });
+
+  it('derives cases per 1% as a twentieth of the batch count', () => {
+    expect(casesPerPctFor('12oz / 24pk')).toBe(585);
+    expect(casesPerPctFor('20oz / 24pk')).toBe(350);
+    expect(casesPerPctFor('0.5L / 1L / 24pk')).toBe(415);
+    expect(casesPerPctFor('1.5L / 12pk')).toBe(277.5);
+  });
+
+  it('returns 0 for an unknown size', () => {
+    expect(casesPerPctFor('nope')).toBe(0);
+  });
+
+  it('keeps the batch counts the sheet prints', () => {
+    expect(WATER_SIZES['12oz / 24pk'].casesPerBatch).toBe(11700);
+    expect(WATER_SIZES['20oz / 24pk'].casesPerBatch).toBe(7000);
+    expect(WATER_SIZES['0.5L / 1L / 24pk'].casesPerBatch).toBe(8300);
+    expect(WATER_SIZES['1.5L / 12pk'].casesPerBatch).toBe(5550);
+  });
+
+  // 1.5L is confirmed 12pk and is never run as 24pk.
+  it('records 1.5L as a 12pk and the rest as 24pk', () => {
+    expect(WATER_SIZES['1.5L / 12pk'].packSize).toBe(12);
+    for (const size of ['12oz / 24pk', '20oz / 24pk', '0.5L / 1L / 24pk']) {
+      expect(WATER_SIZES[size].packSize).toBe(24);
+    }
+  });
+});
+
+describe('casesFromTankLevel', () => {
+  it('gives a full batch back at 20%', () => {
+    for (const [size, s] of Object.entries(WATER_SIZES)) {
+      expect(casesFromTankLevel(size, 20), size).toBe(Math.floor(s.casesPerBatch));
+    }
+  });
+
+  it('uses 350 per 1% for 20oz', () => {
+    expect(casesFromTankLevel('20oz / 24pk', 1)).toBe(350);
+    expect(casesFromTankLevel('20oz / 24pk', 22)).toBe(7700);
+    expect(casesFromTankLevel('20oz / 24pk', 5)).toBe(1750);
+  });
+
+  // Rounds down: the sheet's counts are planning figures, so a runout estimate
+  // must never promise cases that aren't there.
+  it('rounds down, never up', () => {
+    // 1.5L is 277.5 per 1%, so odd percentages land on a half case.
+    expect(casesFromTankLevel('1.5L / 12pk', 1)).toBe(277);
+    expect(casesFromTankLevel('1.5L / 12pk', 3)).toBe(832);   // 832.5
+  });
+
+  it('returns 0 for an unknown size or a non-positive level', () => {
+    expect(casesFromTankLevel('nope', 20)).toBe(0);
+    expect(casesFromTankLevel('20oz / 24pk', 0)).toBe(0);
+    expect(casesFromTankLevel('20oz / 24pk', -5)).toBe(0);
+  });
+});
+
+describe('tankLevelForCases', () => {
+  it('needs a full 20% for one batch worth', () => {
+    for (const [size, s] of Object.entries(WATER_SIZES)) {
+      expect(tankLevelForCases(size, s.casesPerBatch), size).toBeCloseTo(20, 9);
+    }
+  });
+
+  it('is the inverse of casesFromTankLevel', () => {
+    for (const size of Object.keys(WATER_SIZES)) {
+      const pct = tankLevelForCases(size, 5000);
+      expect(casesFromTankLevel(size, pct)).toBeGreaterThanOrEqual(4999);
+      expect(casesFromTankLevel(size, pct)).toBeLessThanOrEqual(5000);
+    }
+  });
+
+  it('reports the level a 10,000 case 20oz run needs', () => {
+    expect(tankLevelForCases('20oz / 24pk', 10000)).toBeCloseTo(28.571, 3);
+  });
+
+  it('returns 0 for an unknown size or non-positive target', () => {
+    expect(tankLevelForCases('nope', 100)).toBe(0);
+    expect(tankLevelForCases('20oz / 24pk', 0)).toBe(0);
+  });
+});
+
+describe('batchesForCases', () => {
+  it('asks for two batches for a 10,000 case 20oz run', () => {
+    const b = batchesForCases('20oz / 24pk', 10000);
+    expect(b.exact).toBeCloseTo(1.4286, 4);
+    expect(b.whole).toBe(2);
+  });
+
+  it('does not ask for an extra batch on an exact multiple', () => {
+    expect(batchesForCases('20oz / 24pk', 14000).whole).toBe(2);
+  });
+
+  it('rounds a fraction up', () => {
+    expect(batchesForCases('20oz / 24pk', 7001).whole).toBe(2);
+  });
+
+  it('returns null for an unknown size or non-positive target', () => {
+    expect(batchesForCases('nope', 100)).toBeNull();
+    expect(batchesForCases('20oz / 24pk', 0)).toBeNull();
+  });
+});
+
+describe('waterPlan', () => {
+  it('answers both directions at once', () => {
+    const p = waterPlan('20oz / 24pk', { levelPct: 20, targetCases: 10000 });
+    expect(p.available).toBe(7000);
+    expect(p.levelNeeded).toBeCloseTo(28.571, 3);
+    expect(p.batches.whole).toBe(2);
+    expect(p.casesPerBatch).toBe(7000);
+    expect(p.casesPerPct).toBe(350);
+    expect(p.packSize).toBe(24);
+  });
+
+  it('is inert with no inputs', () => {
+    const p = waterPlan('20oz / 24pk', {});
+    expect(p.available).toBe(0);
+    expect(p.levelNeeded).toBe(0);
+    expect(p.batches).toBeNull();
+  });
+
+  it('returns null for an unknown size', () => {
+    expect(waterPlan('nope', { levelPct: 10 })).toBeNull();
   });
 });

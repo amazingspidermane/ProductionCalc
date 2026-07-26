@@ -71,3 +71,10 @@ node_modules/
 # Production build output
 dist/
 dist-ssr/
+
+# Plant reference notes — internal batch sheet data, kept out of this PUBLIC repo
+.claude/*.txt
+.claude/*.pdf
+.claude/*.png
+.claude/*.jpg
+.claude/*.jpeg

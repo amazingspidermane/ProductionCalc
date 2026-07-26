@@ -27,6 +27,11 @@ import {
   parseMaterialList,
   formatMaterialList,
   buildRunPlan,
+  WATER_SIZES,
+  WATER_BATCH_UNITS,
+  WATER_PCT_PER_BATCH,
+  casesPerPctFor,
+  waterPlan,
 } from './calc.js';
 import {
   SCHEMAS,
@@ -175,6 +180,7 @@ async function init() {
     // Safety net: Populate immediately from defaults so the app never crashes
     populateDropdowns();
     populateDateCodeDropdown();
+    populateWaterSizes();
 
     // Turn the native selects into searchable comboboxes (progressive
     // enhancement — the underlying <select> stays the source of truth).
@@ -1372,6 +1378,7 @@ const SESSION_FIELDS = [
   'syrup-pack-size-1', 'syrup-pack-size-2', 'syrup-pack-size-3',
   'mat-select', 'mat-target', 'mat-onhand',
   'run-product',   // the pack rows persist separately, under RUN_LINES_KEY
+  'water-size', 'water-level', 'water-target',
   'datecode-product', 'lookup-code', 'lookup-product',
 ];
 
@@ -1399,6 +1406,7 @@ function restoreSession() {
   if (data) {
     // Selects first, so the dependent calculations see the right SKU.
     ['syrup-product', 'mat-select', 'run-product', 'datecode-product', 'lookup-product',
+     'water-size',
      'syrup-pack-size-1', 'syrup-pack-size-2', 'syrup-pack-size-3'].forEach((id) => {
       const el = document.getElementById(id);
       if (el && data[id] != null && Array.from(el.options).some((o) => o.value === data[id])) {
@@ -1408,7 +1416,7 @@ function restoreSession() {
 
     ['syrup-gals', 'syrup-plts', 'syrup-cases', 'syrup-actual-cases-1',
      'syrup-actual-cases-2', 'syrup-actual-cases-3', 'mat-target', 'mat-onhand',
-     'lookup-code'].forEach((id) => {
+     'lookup-code', 'water-level', 'water-target'].forEach((id) => {
       const el = document.getElementById(id);
       if (el && data[id] != null) el.value = data[id];
     });
@@ -1419,6 +1427,7 @@ function restoreSession() {
     updateRunProduct();
     calculateDateCode();
     lookupPrintCode();
+    updateWaterSize();
 
     if (data.tab && data.tab !== 'syrup') switchTab(data.tab);
   }
@@ -1561,6 +1570,76 @@ function calculateDateCode() {
 
   if (resultEl) resultEl.innerText = result.display;
   if (printEl) printEl.innerText = result.printCode;
+}
+
+// --- WATER LINE ---
+//
+// The water line has no syrup and no bill of materials; output is governed by
+// the salts tank. Everything comes from two numbers an operator can read off
+// the HMI: batches made, and tank level %.
+//
+// Cases here are in each size's own pack configuration as printed on batch
+// sheet Fm-268-DD -- 1.5L is a 12pk, the rest are 24pk -- so they are NOT the
+// app's standard 24-cases and must not be added to Syrup or Run Plan totals.
+
+function populateWaterSizes() {
+  const select = document.getElementById("water-size");
+  if (!select) return;
+
+  const current = select.value;
+  select.innerHTML = "";
+  Object.keys(WATER_SIZES).forEach((size) => {
+    const opt = document.createElement("option");
+    opt.value = size;
+    opt.innerText = size;
+    select.appendChild(opt);
+  });
+  if (current && WATER_SIZES[current]) select.value = current;
+}
+
+function updateWaterSize() {
+  const size = document.getElementById("water-size")?.value;
+  const s = WATER_SIZES[size];
+  const badge = document.getElementById("water-info-badge");
+
+  if (badge) {
+    badge.textContent = s
+      ? `${fmt(s.casesPerBatch, { decimals: 0 })} cases per ${WATER_BATCH_UNITS}-unit batch (${WATER_PCT_PER_BATCH}%) · ${fmt(casesPerPctFor(size))} cases per 1% · ${s.packSize}pk`
+      : "—";
+  }
+
+  calculateWater();
+}
+
+function calculateWater() {
+  const size = document.getElementById("water-size")?.value;
+  const plan = waterPlan(size, {
+    levelPct: readNumericField("water-level"),
+    targetCases: readNumericField("water-target"),
+  });
+  if (!plan) return;
+
+  const availEl = document.getElementById("water-available");
+  if (availEl) availEl.innerText = fmt(plan.available, { decimals: 0 });
+
+  // Round the level up: asking for less than needed means a runout mid-run.
+  const levelEl = document.getElementById("water-level-needed");
+  if (levelEl) {
+    levelEl.innerText = plan.levelNeeded > 0
+      ? fmt(Math.ceil(plan.levelNeeded * 10) / 10, { decimals: 1 })
+      : "0";
+  }
+
+  const batchEl = document.getElementById("water-batches");
+  const batchNote = document.getElementById("water-batches-note");
+  if (batchEl) batchEl.innerText = plan.batches ? fmt(plan.batches.whole, { decimals: 0 }) : "0";
+  if (batchNote) {
+    batchNote.innerText = plan.batches
+      ? `${fmt(plan.batches.exact)} exact · ${WATER_BATCH_UNITS} units each`
+      : "";
+  }
+
+  saveSession();
 }
 
 /**
@@ -2334,6 +2413,8 @@ window.clearRunPlan = clearRunPlan;
 window.handleMath = handleMath;
 window.calculateDateCode = calculateDateCode;
 window.lookupPrintCode = lookupPrintCode;
+window.updateWaterSize = updateWaterSize;
+window.calculateWater = calculateWater;
 window.migrateDataToCloud = migrateDataToCloud;
 window.switchAdminTab = switchAdminTab;
 window.toggleProductFields = toggleProductFields;
@@ -2454,7 +2535,8 @@ document.addEventListener('keydown', (e) => {
     else if (e.altKey && e.key === '2') { e.preventDefault(); switchTab('materials'); }
     // Numbered by position in the tab strip, so Run Plan takes 3 and QA Codes moves to 4.
     else if (e.altKey && e.key === '3') { e.preventDefault(); switchTab('runplan'); }
-    else if (e.altKey && e.key === '4') { e.preventDefault(); switchTab('datecode'); }
+    else if (e.altKey && e.key === '4') { e.preventDefault(); switchTab('water'); }
+    else if (e.altKey && e.key === '5') { e.preventDefault(); switchTab('datecode'); }
     else if (e.key === '?' && !typing) { e.preventDefault(); window.showHelpModal(); }
     else if (e.key === '/' && !typing) {
         // Jump straight to the search box of the visible tab.
