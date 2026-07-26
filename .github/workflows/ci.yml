@@ -1,0 +1,41 @@
+name: CI
+
+# Runs on every push and pull request. Cheap, and it means a change made from a
+# phone gets its tests run before anyone considers deploying it.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # npm install, not npm ci. The lockfile is generated on Windows, and npm
+      # resolves the @emnapi packages under @rolldown/binding-wasm32-wasi
+      # differently on Linux, so `npm ci` -- which requires the installed tree to
+      # match the lockfile exactly -- fails on the runner. npm install resolves
+      # for the platform it runs on. Slightly less reproducible; the test suite
+      # is what actually pins behaviour here.
+      - run: npm install --no-audit --no-fund
+
+      - run: npm test
+
+      # The build needs the VITE_FIREBASE_* values or main.js bails out, so a
+      # build here also proves those repo secrets are present and correct.
+      - run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}

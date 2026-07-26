@@ -2,90 +2,302 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  background-color: #f4f4f5;
-  /* Crisp Image & Font Rendering */
-  image-rendering: high-quality;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* ============================================================
+   BASE
+   ============================================================ */
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  :root.dark {
+    color-scheme: dark;
+  }
 
-  /* Background base properties */
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed;
-  background-repeat: no-repeat;
+  body {
+    @apply font-sans antialiased text-slate-800 dark:text-slate-100;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 
-  min-height: 100vh;
-  position: relative;
-  overflow-x: hidden;
-  overscroll-behavior-y: none;
-  -webkit-tap-highlight-color: transparent;
+    min-height: 100vh;
+    min-height: 100dvh;
+    position: relative;
+    overflow-x: hidden;
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
 
-  /* ADDED: Flexbox layout to force footer to the bottom */
-  display: flex;
-  flex-direction: column;
+    display: flex;
+    flex-direction: column;
+
+    /* Self-contained brand backdrop: a warm red glow over a cool neutral base.
+       Replaces the four remote Firebase Storage PNGs — no network request, no
+       pop-in, works offline, and no `background-attachment: fixed` jank on iOS. */
+    background-color: #eef0f4;
+    background-image:
+      radial-gradient(900px 600px at 12% -8%, rgba(221, 20, 53, 0.13), transparent 62%),
+      radial-gradient(760px 520px at 92% 4%, rgba(248, 51, 77, 0.09), transparent 58%),
+      radial-gradient(1100px 800px at 50% 108%, rgba(15, 23, 42, 0.07), transparent 60%);
+    background-attachment: scroll;
+    background-repeat: no-repeat;
+  }
+
+  .dark body {
+    background-color: #0b1120;
+    background-image:
+      radial-gradient(900px 600px at 12% -8%, rgba(186, 15, 44, 0.26), transparent 62%),
+      radial-gradient(760px 520px at 92% 4%, rgba(74, 4, 16, 0.42), transparent 58%),
+      radial-gradient(1100px 800px at 50% 108%, rgba(30, 41, 59, 0.55), transparent 60%);
+  }
+
+  /* Consistent keyboard focus indicator across every interactive element.
+     Individual components use `outline-none`, so this has to win. */
+  :focus-visible {
+    outline: 2px solid theme('colors.brand.500');
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  button,
+  select,
+  input[type="date"],
+  .nav-tab {
+    touch-action: manipulation;
+  }
+
+  /* Result readouts must not jitter while the count-up animation runs. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.45);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.75);
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    background: rgba(71, 85, 105, 0.7);
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.9);
+  }
+
+  /* Native date picker indicator is invisible on dark backgrounds. */
+  .dark input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: invert(1) opacity(0.7);
+  }
 }
 
-/* --- ALTERNATING BACKGROUND CLASSES (4 IMAGES) --- */
-body.bg-1 {
-  background-image: linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),
-    url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_2refko2refko2ref.png?alt=media&token=46599f4f-902f-4c71-a88b-7edd938a9f68');
-}
-body.bg-2 {
-  background-image: linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),
-    url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_iwnuv0iwnuv0iwnu.png?alt=media&token=d62190dd-52d3-46b1-a0b0-451e137b2048');
-}
-body.bg-3 {
-  background-image: linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),
-    url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_3vdpjl3vdpjl3vdp.png?alt=media&token=bd68686b-b694-43fa-8e6b-83b1a1e3e1c9');
-}
-body.bg-4 {
-  background-image: linear-gradient(135deg, rgba(244, 244, 245, 0.10) 0%, rgba(255, 241, 241, 0.15) 100%),
-    url('https://firebasestorage.googleapis.com/v0/b/productioncalc-bbd66.firebasestorage.app/o/Website%20background%2FGemini_Generated_Image_66rl4066rl4066rl.png?alt=media&token=fce96fcf-232a-40ba-be38-baa98d5732c4');
+/* ============================================================
+   COMPONENTS
+   Repeated patterns live here so index.html stays readable and
+   dark mode is defined once per pattern instead of per element.
+   ============================================================ */
+@layer components {
+  .glass-panel {
+    @apply rounded-2xl border backdrop-blur-xl shadow-panel;
+    @apply bg-white/85 border-white/70;
+    @apply dark:bg-slate-900/80 dark:border-white/10;
+  }
+
+  /* Neutral input card — the default. One border, one shadow, no ring. */
+  .calc-card {
+    @apply rounded-xl border p-4 transition-shadow duration-150;
+    @apply bg-white/70 border-slate-200 shadow-card;
+    @apply dark:bg-slate-800/60 dark:border-slate-700;
+    @apply hover:shadow-raised focus-within:border-brand-400 dark:focus-within:border-brand-500;
+  }
+
+  /* The one card that holds the answer. Loudest thing on the tab. */
+  .calc-card-primary {
+    @apply calc-card;
+    @apply bg-brand-50/80 border-brand-200;
+    @apply dark:bg-brand-950/40 dark:border-brand-900;
+  }
+
+  .input-label {
+    @apply block mb-2 text-xs font-extrabold uppercase tracking-wider;
+    @apply text-slate-500 dark:text-slate-400;
+  }
+
+  .input-field {
+    @apply w-full rounded-lg border outline-none transition-colors duration-150;
+    @apply bg-white text-slate-900 border-slate-300 placeholder:text-slate-400;
+    @apply dark:bg-slate-900/70 dark:text-slate-50 dark:border-slate-600 dark:placeholder:text-slate-500;
+    @apply focus:border-brand-500 dark:focus:border-brand-400;
+  }
+
+  .input-field:focus {
+    box-shadow: 0 0 0 3px rgba(248, 51, 77, 0.12);
+  }
+
+  /* Big centered number entry used by the syrup grid. */
+  .input-numeric {
+    @apply input-field tnum py-3 text-center text-2xl font-bold;
+  }
+
+  .select-field {
+    @apply input-field appearance-none cursor-pointer font-medium;
+    @apply pl-4 pr-10 py-3;
+  }
+
+  .nav-tab {
+    @apply relative border-b-2 border-transparent transition-colors duration-150;
+    @apply text-slate-500 dark:text-slate-400;
+  }
+  .nav-tab:hover {
+    @apply text-slate-900 bg-slate-500/5;
+    @apply dark:text-slate-50 dark:bg-white/5;
+  }
+  .nav-tab.active {
+    @apply border-brand-600 text-brand-700 bg-brand-50/70;
+    @apply dark:border-brand-400 dark:text-brand-300 dark:bg-brand-500/10;
+  }
+
+  .admin-tab {
+    @apply whitespace-nowrap px-4 py-2 font-bold border-b-2 border-transparent transition-colors;
+    @apply text-slate-500 hover:text-brand-700 dark:text-slate-400 dark:hover:text-brand-300;
+  }
+  .admin-tab.active {
+    @apply text-brand-700 border-brand-700 dark:text-brand-300 dark:border-brand-400;
+  }
+
+  .btn-primary {
+    @apply rounded-lg font-bold text-white shadow-raised transition-all duration-150;
+    @apply bg-brand-600 hover:bg-brand-700 active:scale-[0.98];
+    @apply dark:bg-brand-600 dark:hover:bg-brand-500;
+  }
+
+  .btn-ghost {
+    @apply rounded-lg font-semibold transition-colors duration-150;
+    @apply text-slate-500 hover:text-brand-700 hover:bg-brand-50;
+    @apply dark:text-slate-400 dark:hover:text-brand-300 dark:hover:bg-brand-500/10;
+  }
+
+  .icon-btn {
+    @apply flex items-center justify-center rounded-full transition-all duration-150;
+    @apply active:scale-95;
+  }
+
+  /* Small "copy this value" affordance attached to result readouts. */
+  .copy-btn {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold transition-colors duration-150;
+    @apply text-slate-500 hover:text-brand-700 hover:bg-brand-50;
+    @apply dark:text-slate-400 dark:hover:text-brand-300 dark:hover:bg-brand-500/10;
+  }
+  .copy-btn.copied {
+    @apply text-emerald-600 dark:text-emerald-400;
+  }
+
+  .field-hint {
+    @apply text-xs font-medium text-slate-400 dark:text-slate-500;
+  }
 }
 
-button, .nav-tab, select, input[type="date"], .glass-panel {
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: manipulation;
+/* ============================================================
+   TABS — CSS-only crossfade (no chained setTimeouts)
+   ============================================================ */
+.tab-pane {
+  display: none;
+}
+.tab-pane.active {
+  display: block;
+  animation: tab-in 200ms ease-out both;
 }
 
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.03);
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(185, 28, 28, 0.3);
-  border-radius: 10px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(185, 28, 28, 0.6);
+@keyframes tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-/* --- SODA FIZZ ANIMATION --- */
+/* Brief flash used to explain that A/B/C were cleared by a top-row edit. */
+@keyframes wipe-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(248, 51, 77, 0.0); }
+  30%  { box-shadow: 0 0 0 4px rgba(248, 51, 77, 0.28); }
+  100% { box-shadow: 0 0 0 0 rgba(248, 51, 77, 0.0); }
+}
+.wipe-flash {
+  animation: wipe-flash 700ms ease-out;
+}
+
+/* ============================================================
+   NAVBAR — condenses on scroll to reclaim vertical space on mobile
+   ============================================================ */
+#site-nav {
+  transition: height 200ms ease, box-shadow 200ms ease;
+}
+#site-nav .nav-inner {
+  height: 5rem;
+  transition: height 200ms ease;
+}
+#site-nav.condensed .nav-inner {
+  height: 3.5rem;
+}
+#site-nav .nav-logo {
+  transition: width 200ms ease, height 200ms ease;
+}
+#site-nav.condensed .nav-logo {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+#site-nav .nav-subtitle {
+  max-height: 1.25rem;
+  opacity: 1;
+  transition: max-height 200ms ease, opacity 150ms ease;
+}
+#site-nav.condensed .nav-subtitle {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+#site-nav.condensed .nav-title {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+}
+#site-nav .nav-title {
+  transition: font-size 200ms ease;
+}
+
+/* Tab strip sticks directly beneath whatever height the nav currently is. */
+.tab-strip {
+  top: 5rem;
+  transition: top 200ms ease;
+}
+body.nav-condensed .tab-strip {
+  top: 3.5rem;
+}
+
+/* ============================================================
+   SODA FIZZ
+   ============================================================ */
 .fizz-container {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   overflow: hidden;
-  z-index: 1;
+  z-index: 0;
   pointer-events: none;
 }
 
 .bubble {
   position: absolute;
   bottom: -20px;
-  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.1) 50%, transparent 100%);
-  border: 1.5px solid rgba(255, 255, 255, 0.6);
-  box-shadow: inset -2px -2px 6px rgba(0, 0, 0, 0.05), inset 2px 2px 6px rgba(255, 255, 255, 0.9), 0 0 8px rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(1.5px);
-  -webkit-backdrop-filter: blur(1.5px);
+  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.1) 50%, transparent 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  box-shadow: inset -2px -2px 6px rgba(0, 0, 0, 0.04), inset 2px 2px 6px rgba(255, 255, 255, 0.8);
   border-radius: 50%;
   opacity: 0;
   left: var(--left);
@@ -96,156 +308,112 @@ button, .nav-tab, select, input[type="date"], .glass-panel {
   animation-delay: var(--delay);
 }
 
+.dark .bubble {
+  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.06) 50%, transparent 100%);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
 @keyframes rise {
   0% {
-    bottom: -20px;
-    opacity: 0;
     transform: translate3d(0, 0, 0);
+    opacity: 0;
   }
   15% {
-    opacity: 0.95;
+    opacity: 0.85;
   }
   50% {
-    opacity: 0.7;
+    opacity: 0.6;
   }
   100% {
-    bottom: 120vh;
+    transform: translate3d(var(--drift), -120vh, 0);
     opacity: 0;
-    transform: translate3d(var(--drift), 0, 0);
   }
 }
 
-.nav-tab {
-  border-bottom: 2px solid transparent;
-  color: #71717a;
-  transition: all 0.2s;
-}
-.nav-tab:hover {
-  color: #000;
-  background-color: rgba(255, 255, 255, 0.4);
-}
-.nav-tab.active {
-  border-bottom-color: #b91c1c;
-  color: #b91c1c;
-  background-color: rgba(254, 242, 242, 0.6);
+/* ============================================================
+   COMBOBOX (searchable dropdown)
+   ============================================================ */
+.combobox-panel {
+  @apply absolute z-50 mt-2 w-full overflow-y-auto rounded-xl border shadow-panel;
+  @apply bg-white border-slate-200 dark:bg-slate-800 dark:border-slate-600;
+  max-height: 18rem;
 }
 
-.input-label {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 800;
-  color: #52525b;
-  margin-bottom: 0.5rem;
-  display: block;
+.combobox-group {
+  @apply sticky top-0 px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-wider;
+  @apply bg-slate-100 text-slate-500 dark:bg-slate-900 dark:text-slate-400;
 }
 
-.input-field:focus {
-  box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.1);
-  border-color: #b91c1c;
+.combobox-option {
+  @apply cursor-pointer px-4 py-3 text-sm font-medium transition-colors duration-75;
+  @apply text-slate-700 dark:text-slate-200;
+}
+.combobox-option:hover,
+.combobox-option.highlighted {
+  @apply bg-brand-50 text-brand-800 dark:bg-brand-500/15 dark:text-brand-200;
+}
+.combobox-option[aria-selected="true"] {
+  @apply font-bold text-brand-700 dark:text-brand-300;
 }
 
-.glass-panel {
-  background-color: rgba(255, 255, 255, 0.80);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+.combobox-empty {
+  @apply px-4 py-6 text-center text-sm italic;
+  @apply text-slate-400 dark:text-slate-500;
 }
 
+/* ============================================================
+   SWEETALERT — inherit the app's dark theme
+   ============================================================ */
+.dark .swal2-popup {
+  background: #1e293b !important;
+  color: #f1f5f9 !important;
+}
+.dark .swal2-title,
+.dark .swal2-html-container {
+  color: #f1f5f9 !important;
+}
+
+/* ============================================================
+   MOTION & TOUCH PREFERENCES
+   ============================================================ */
+
+/* Users can silence the fizz from the UI; the class is set on <html>. */
+.no-fizz .fizz-container {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .fizz-container {
+    display: none;
+  }
+
+  .tab-pane.active {
+    animation: none;
+  }
+}
+
+/* Comfortable touch targets on phones. */
 @media (max-width: 640px) {
-  .text-2xl { font-size: 1.75rem !important; }
-  .text-6xl { font-size: 4rem !important; line-height: 1; }
-  input[type="number"], input[type="text"], select, button {
-    min-height: 56px;
-    font-size: 1.1rem !important;
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="date"],
+  select,
+  button {
+    min-height: 48px;
+  }
+
+  .input-numeric {
+    font-size: 1.6rem;
   }
 }
-
-/* --- FIX: Force dark text on inputs and admin panels --- */
-#admin-panel input, 
-#admin-panel select, 
-#admin-panel textarea { 
-  color: #0f172a !important;  
-  background-color: #ffffff !important; 
-  border: 1px solid #cbd5e1 !important; 
-}
-
-input, select, textarea, #admin-panel {
-  color: #1e293b !important;
-}
-
-/* --- UX ANIMATIONS --- */
-.tab-pane {
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity 0.3s ease, transform 0.3s ease;
-}
-.tab-pane.active {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* --- DARK MODE OVERRIDES --- */
-body.dark-mode {
-  background-color: #0f172a;
-}
-body.dark-mode.bg-1, body.dark-mode.bg-2, body.dark-mode.bg-3, body.dark-mode.bg-4 {
-  background-blend-mode: overlay;
-  background-color: rgba(15, 23, 42, 0.85); /* Deep dark blue overlay */
-}
-
-body.dark-mode .glass-panel {
-  background-color: rgba(30, 41, 59, 0.85);
-  border-color: rgba(255, 255, 255, 0.1);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  color: #f1f5f9;
-}
-
-body.dark-mode .nav-tab { color: #94a3b8; }
-body.dark-mode .nav-tab:hover { color: #f8fafc; background-color: rgba(255, 255, 255, 0.1); }
-body.dark-mode .nav-tab.active { color: #ef4444; border-bottom-color: #ef4444; background-color: rgba(239, 68, 68, 0.1); }
-
-body.dark-mode .input-label { color: #cbd5e1; }
-body.dark-mode .input-field, body.dark-mode select {
-  background-color: rgba(15, 23, 42, 0.8) !important;
-  color: #f8fafc !important;
-  border-color: #475569 !important;
-}
-body.dark-mode .input-field:focus, body.dark-mode select:focus {
-  border-color: #ef4444 !important;
-}
-
-/* Override input text colors specifically */
-body.dark-mode input, body.dark-mode select, body.dark-mode textarea {
-  color: #f8fafc !important;
-}
-
-body.dark-mode select option, body.dark-mode select optgroup {
-  background-color: #1e293b !important;
-  color: #f8fafc !important;
-}
-
-/* Admin panel specific */
-body.dark-mode #admin-panel input, 
-body.dark-mode #admin-panel select, 
-body.dark-mode #admin-panel textarea { 
-  background-color: #1e293b !important;
-  color: #f8fafc !important;
-  border-color: #475569 !important;
-}
-
-/* Adjust card backgrounds in dark mode */
-body.dark-mode [class*="bg-white/50"] { background-color: rgba(30, 41, 59, 0.6) !important; border-color: #334155; }
-body.dark-mode [class*="bg-red-50/60"] { background-color: rgba(69, 10, 10, 0.4) !important; border-color: #7f1d1d; }
-body.dark-mode [class*="bg-blue-50/60"] { background-color: rgba(15, 23, 42, 0.6) !important; border-color: #1e3a8a; }
-body.dark-mode [class*="bg-indigo-50/60"] { background-color: rgba(30, 27, 75, 0.4) !important; border-color: #312e81; }
-body.dark-mode [class*="bg-violet-50/60"] { background-color: rgba(46, 16, 101, 0.4) !important; border-color: #4c1d95; }
-body.dark-mode .bg-slate-50 { background-color: #0f172a !important; border-color: #334155 !important; }
-
-/* Text colors inside cards */
-body.dark-mode .text-gray-900, body.dark-mode .text-gray-800, body.dark-mode .text-gray-600 { color: #f8fafc !important; }
-body.dark-mode .text-slate-500 { color: #94a3b8 !important; }
-body.dark-mode [class*="bg-white/90"] { background-color: #1e293b !important; border-color: #334155 !important; }
-body.dark-mode [class*="bg-white/70"] { background-color: #1e293b !important; border-color: #334155 !important; }
-body.dark-mode [class*="bg-white/60"] { background-color: #1e293b !important; border-color: #334155 !important; }

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Generic straight-sided beverage can + calculator rows.
+       Deliberately NOT a contour bottle silhouette. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#1f2937"/>
+    </linearGradient>
+    <linearGradient id="can" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f8334d"/>
+      <stop offset="100%" stop-color="#9b1029"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <g transform="translate(256,256)">
+    <!-- Can body -->
+    <rect x="-78" y="-150" width="156" height="300" rx="26" fill="url(#can)"/>
+    <!-- Top rim -->
+    <ellipse cx="0" cy="-150" rx="78" ry="20" fill="#ff9daa"/>
+    <ellipse cx="0" cy="-150" rx="56" ry="12" fill="#7a0c20" opacity="0.55"/>
+    <!-- Specular highlight -->
+    <rect x="-56" y="-128" width="20" height="256" rx="10" fill="#ffffff" opacity="0.16"/>
+    <!-- Calculator readout rows -->
+    <g stroke="#ffffff" stroke-linecap="round">
+      <line x1="-38" y1="-42" x2="40" y2="-42" stroke-width="12" opacity="0.88"/>
+      <line x1="-38" y1="-2"  x2="14" y2="-2"  stroke-width="12" opacity="0.62"/>
+      <line x1="-38" y1="38"  x2="32" y2="38"  stroke-width="12" opacity="0.46"/>
+      <line x1="-38" y1="78"  x2="2"  y2="78"  stroke-width="12" opacity="0.32"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,67 @@
+name: Preview deploy
+
+# Every pull request gets its own throwaway URL. This is the safe half of the
+# mobile workflow: you can open a change from your phone, look at the real app
+# on a real URL, and nothing reaches the plant floor until you say so.
+on:
+  pull_request:
+
+# A PR from a fork would expose the deploy credentials, so only branches on this
+# repo get a preview.
+jobs:
+  preview:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # npm install, not npm ci. The lockfile is generated on Windows, and npm
+      # resolves the @emnapi packages under @rolldown/binding-wasm32-wasi
+      # differently on Linux, so `npm ci` -- which requires the installed tree to
+      # match the lockfile exactly -- fails on the runner. npm install resolves
+      # for the platform it runs on. Slightly less reproducible; the test suite
+      # is what actually pins behaviour here.
+      - run: npm install --no-audit --no-fund
+
+      # An unset secret builds fine but produces an app that cannot reach
+      # Firebase, which would make the preview misleading rather than useful.
+      - name: Check build secrets are present
+        env:
+          KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::VITE_FIREBASE_* repo secrets are not set — the preview would not reach Firebase."
+            exit 1
+          fi
+
+      - run: npm test
+
+      - run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_MEASUREMENT_ID: ${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}
+
+      # Hosting only. Firestore rules are deliberately not touched here — a
+      # preview channel shares the one live database, so deploying rules from a
+      # PR would change production access control for everyone.
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PRODUCTIONCALC_BBD66 }}
+          projectId: productioncalc-bbd66
+          expires: 7d
