@@ -23,6 +23,7 @@ import {
   optimumTasteDate,
   parsePrintCode,
   productionDateFromCode,
+  identifyFromPrintCode,
   MONTHS,
   parseMaterialList,
   formatMaterialList,
@@ -175,6 +176,7 @@ async function init() {
     initFizz();
     initNavCondense();
     initCopyButtons();
+    initCodeGuess();
     initAdminControls();
 
     // Safety net: Populate immediately from defaults so the app never crashes
@@ -500,6 +502,32 @@ function initCopyButtons() {
       flashCopied(summaryBtn);
     });
   }
+}
+
+/**
+ * Let a guessed shelf life be accepted with one tap.
+ *
+ * Delegated from the document because the result panel is rebuilt on every
+ * keystroke, so any listener bound to a button inside it would be thrown away.
+ */
+function initCodeGuess() {
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-lookup-weeks]');
+    if (!btn) return;
+
+    const select = document.getElementById('lookup-product');
+    const weeks = btn.dataset.lookupWeeks;
+    // Several products share a shelf life; the first option carrying it is as
+    // good as any, since only the weeks figure feeds the calculation.
+    const opt = select && Array.from(select.options).find((o) => o.value === weeks);
+    if (!opt) return;
+
+    select.value = weeks;
+    syncComboboxes();
+    lookupPrintCode();
+    saveSession();
+    announce(`Shelf life set to ${weeks} weeks`);
+  });
 }
 
 async function copyText(text, successMessage) {
@@ -1642,13 +1670,125 @@ function calculateWater() {
   saveSession();
 }
 
+/** "An 18-week product", "A 39-week product" — 8, 11 and 18 read as vowels. */
+function article(n) {
+  return /^(8|11|18)/.test(String(n)) ? 'An' : 'A';
+}
+
+/** Plain-language age for a production date, e.g. "3 days ago". */
+function describeAge(days) {
+  if (days < 0) return days === -1 ? 'tomorrow' : `in ${-days} days`;
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 14) return `${days} days ago`;
+  if (days < 70) return `${Math.round(days / 7)} weeks ago`;
+  return `${Math.round(days / 30.44)} months ago`;
+}
+
+/** One tappable row per runner-up shelf life. */
+function guessRow(c) {
+  const names = c.products.map((p) => p.name).join(' · ');
+  return `<button type="button" data-lookup-weeks="${c.weeks}"
+      class="w-full text-left py-2 px-2 -mx-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+      <div class="flex items-baseline justify-between gap-3">
+        <span class="text-xs font-bold text-slate-600 dark:text-slate-300">${c.weeks} weeks</span>
+        <span class="tnum text-sm font-bold text-slate-800 dark:text-slate-100">${escapeHtml(c.display)}</span>
+      </div>
+      <div class="flex items-baseline justify-between gap-3">
+        <span class="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1" title="${escapeHtml(names)}">${escapeHtml(names)}</span>
+        <span class="text-[11px] text-slate-400 dark:text-slate-500 flex-shrink-0">${escapeHtml(describeAge(c.ageDays))}</span>
+      </div>
+    </button>`;
+}
+
+/**
+ * Guess the product from the code alone.
+ *
+ * Worth being clear about what this can and can't do: the code fixes an expiry,
+ * not a shelf life, so the product is never strictly determined. But each
+ * candidate shelf life implies its own production date, and a date in the
+ * future is impossible — which on a long-dated code eliminates everything
+ * short and leaves one answer. Where several readings survive, the most
+ * recently produced one leads, because product being read off a line or a
+ * fresh pallet was made days ago, not last year.
+ */
+function renderCodeGuess(code) {
+  const guess = identifyFromPrintCode(code, Object.values(QA_CODE_DB));
+  if (!guess || !guess.candidates.length) {
+    return `<p class="text-xs text-slate-500 dark:text-slate-400 mt-4">Pick a category to get the production date.</p>`;
+  }
+
+  const best = guess.best;
+  const others = guess.candidates.filter((c) => c.possible && c !== best);
+  const ruledOut = guess.candidates.filter((c) => !c.possible);
+
+  // Nothing survives when the expiry is dated further out than the longest
+  // shelf life on file — the code isn't ours, or the catalogue is missing one.
+  if (!best) {
+    return `<p class="text-sm font-bold text-amber-700 dark:text-amber-300 mt-4">
+        <i class="fas fa-triangle-exclamation mr-2" aria-hidden="true"></i>No shelf life on file fits this code.</p>
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">Every category would put production in the future, so this was printed somewhere else.</p>`;
+  }
+
+  const names = best.products.map((p) => p.name).join(' · ');
+
+  // Be straight about how much the code actually narrowed things down. Ranking
+  // by most-recent is right for product read off a line or a fresh pallet; on
+  // stock that has sat a while a longer shelf life may be the true answer, and
+  // saying so is what keeps the badge honest.
+  const fits = guess.candidates.filter((c) => c.possible).length;
+  const confidence = guess.sole
+    ? 'The only shelf life that fits — every shorter one would put production in the future.'
+    : fits <= 3
+      ? `Narrowed to ${fits} that fit; this one was produced most recently.`
+      : `${fits} shelf lives fit this code. This is the most recent, which is the right call for fresh product — for stock that has sat a while, check the others.`;
+
+  const warnings = [
+    guess.weekAligned ? '' : `<p class="text-xs text-amber-700 dark:text-amber-300 mt-3">
+        <i class="fas fa-triangle-exclamation mr-1" aria-hidden="true"></i>This code doesn't expire on a Monday, so it wasn't printed by this plant's system. Every reading here is a guess.</p>`,
+    guess.expired ? `<p class="text-xs text-red-700 dark:text-red-300 mt-3">
+        <i class="fas fa-circle-exclamation mr-1" aria-hidden="true"></i>Past its best-before date.</p>` : '',
+  ].join('');
+
+  const otherRows = others.length ? `
+    <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500 mt-5 mb-1 text-left">Also possible</p>
+    <div class="divide-y divide-slate-200/70 dark:divide-slate-700/70">${others.map(guessRow).join('')}</div>` : '';
+
+  const ruledOutNote = ruledOut.length ? `
+    <p class="text-[11px] text-slate-400 dark:text-slate-500 mt-3 text-left">
+      <i class="fas fa-ban mr-1" aria-hidden="true"></i>Ruled out: ${ruledOut.map((c) => c.weeks).sort((a, b) => a - b).join(', ')} weeks — production would not have happened yet.</p>` : '';
+
+  return `
+    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 text-left">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-brand-100 text-brand-800 border border-brand-200 dark:bg-brand-500/15 dark:text-brand-200 dark:border-brand-800">Most likely</span>
+        <span class="text-xs font-bold text-slate-500 dark:text-slate-400">${best.weeks} week shelf life</span>
+      </div>
+
+      <p class="text-sm font-bold text-slate-800 dark:text-slate-100 leading-snug">${escapeHtml(names)}</p>
+
+      <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">
+        Produced <strong class="tnum text-slate-700 dark:text-slate-200">${escapeHtml(best.display)}</strong>
+        · ${escapeHtml(best.dayName)} · ${escapeHtml(describeAge(best.ageDays))}</p>
+
+      <p class="text-[11px] text-slate-400 dark:text-slate-500 mt-2">${confidence}</p>
+      ${warnings}
+
+      <button type="button" data-lookup-weeks="${best.weeks}" class="btn-ghost px-3 py-2 text-xs mt-3">
+        <i class="fas fa-check mr-1" aria-hidden="true"></i>Use this category</button>
+
+      ${otherRows}
+      ${ruledOutNote}
+    </div>`;
+}
+
 /**
  * Reverse lookup: a code off a can, back to the day it was made.
  *
  * The code carries the expiry and the production weekday but not the shelf
- * life, so a category is needed to pin the date. Without one we show every
- * distinct shelf life on file and let the operator recognise theirs, which
- * beats refusing to answer when someone is holding an unlabelled can.
+ * life, so a category pins the date exactly. Without one we rank the shelf
+ * lives on file by how plausible each production date is and name the products
+ * behind the winner — see renderCodeGuess() for why that ranking is sound.
  */
 function lookupPrintCode() {
   const codeEl = document.getElementById("lookup-code");
@@ -1679,22 +1819,7 @@ function lookupPrintCode() {
     </div>`;
 
   if (!weeks) {
-    // No category chosen — offer one row per distinct shelf life on file.
-    const weeksOnFile = [...new Set(Object.values(QA_CODE_DB).map((c) => Number(c.weeks)))]
-      .filter((w) => w > 0)
-      .sort((a, b) => a - b);
-
-    const rows = weeksOnFile.map((w) => {
-      const r = productionDateFromCode(raw, w);
-      return `<div class="flex items-baseline justify-between gap-3 py-1.5 border-b border-slate-200/70 dark:border-slate-700/70 last:border-0">
-        <span class="text-xs text-slate-500 dark:text-slate-400">${w} weeks</span>
-        <span class="tnum text-sm font-bold text-slate-800 dark:text-slate-100">${escapeHtml(r.display)}</span>
-      </div>`;
-    }).join('');
-
-    out.innerHTML = `${header}
-      <p class="text-xs text-slate-500 dark:text-slate-400 mt-4 mb-1">Pick a category for the exact date, or match a shelf life:</p>
-      <div class="mt-1">${rows}</div>`;
+    out.innerHTML = header + renderCodeGuess(raw);
     return;
   }
 
@@ -1706,12 +1831,25 @@ function lookupPrintCode() {
   const warn = r.weekAligned ? '' : `<p class="text-xs text-amber-700 dark:text-amber-300 mt-3">
       <i class="fas fa-triangle-exclamation mr-1" aria-hidden="true"></i>This code doesn't expire on a Monday, so it wasn't printed by this plant's system. Treat the date below as a best guess.</p>`;
 
+  // The chosen category has to be able to produce this code. If it puts the
+  // production date in the future, the category is wrong — say so rather than
+  // printing a confident date nobody could have run.
+  const guess = identifyFromPrintCode(raw, Object.values(QA_CODE_DB));
+  const chosen = guess && guess.candidates.find((c) => c.weeks === weeks);
+  const mismatch = chosen && !chosen.possible && guess.best
+    ? `<p class="text-xs text-amber-700 dark:text-amber-300 mt-3">
+        <i class="fas fa-triangle-exclamation mr-1" aria-hidden="true"></i>${article(weeks)} ${weeks}-week product couldn't carry this code — it wouldn't have been made yet.
+        ${guess.best.weeks} weeks fits better.
+        <button type="button" data-lookup-weeks="${guess.best.weeks}" class="underline font-bold">Switch</button></p>`
+    : '';
+
   out.innerHTML = `${header}
     <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 text-center">
       <span class="text-xs font-bold uppercase tracking-wide text-brand-800 dark:text-brand-300">Produced</span>
       <p id="lookup-proddate" class="tnum text-4xl font-extrabold text-brand-700 dark:text-brand-400 tracking-tight">${escapeHtml(r.display)}</p>
       <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">${escapeHtml(r.dayName)} · week of ${escapeHtml(fmtShort(r.weekStart))}–${escapeHtml(fmtShort(weekEnd))} · ${r.weeks} week shelf life</p>
       ${warn}
+      ${mismatch}
       <div class="flex items-center justify-center gap-2 mt-4">
         <button type="button" class="copy-btn" data-copy-from="lookup-proddate" data-copy-label="Production date"><i class="fas fa-copy" aria-hidden="true"></i><span>Copy date</span></button>
       </div>

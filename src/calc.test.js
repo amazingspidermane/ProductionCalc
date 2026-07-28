@@ -16,6 +16,7 @@ import {
   optimumTasteDate,
   parsePrintCode,
   productionDateFromCode,
+  identifyFromPrintCode,
   DAY_LETTERS,
   parseMaterialList,
   formatMaterialList,
@@ -710,6 +711,124 @@ describe('productionDateFromCode', () => {
     expect(productionDateFromCode(REAL, 0)).toBeNull();
     expect(productionDateFromCode(REAL, NaN)).toBeNull();
     expect(productionDateFromCode(REAL, undefined)).toBeNull();
+  });
+});
+
+describe('identifyFromPrintCode', () => {
+  // Mirrors the real catalogue's shape: a handful of shelf lives, two products
+  // sharing 52 weeks so the grouping has something to collapse.
+  const CATALOGUE = [
+    { name: 'DPSG Diets (0.5L, 20oz Bottles)', weeks: 11, category: 'bottle' },
+    { name: 'C/F Diet Coke flavors',           weeks: 13, category: 'can' },
+    { name: 'All Coke Zero flavors',           weeks: 18, category: 'can' },
+    { name: 'MM Lemonade',                     weeks: 26, category: 'can' },
+    { name: 'Coke, Fanta, Sprite',             weeks: 39, category: 'can' },
+    { name: 'Dasani (Bottles)',                weeks: 52, category: 'bottle' },
+    { name: "Seagram's Seltzer, AHA",          weeks: 52, category: 'can' },
+  ];
+
+  const MADE = '2026-03-16';                 // a Monday
+  const madeOn = new Date(MADE + 'T12:00:00');
+
+  it('picks the shelf life implying the most recent production date', () => {
+    // A code printed today at 11 weeks. Every longer shelf life also reads back
+    // into the past, so nothing is impossible — recency alone has to decide it.
+    const code = optimumTasteDate(MADE, 11).printCode;
+    const r = identifyFromPrintCode(code, CATALOGUE, { today: madeOn });
+
+    expect(r.best.weeks).toBe(11);
+    expect(r.best.isoDate).toBe(MADE);
+    expect(r.best.ageDays).toBe(0);
+    expect(r.candidates.every((c) => c.possible)).toBe(true);
+    expect(r.sole).toBe(false);
+    // Ranked by production date, newest first.
+    expect(r.candidates.map((c) => c.weeks)).toEqual([11, 13, 18, 26, 39, 52]);
+  });
+
+  it('rules out shelf lives that would not have been produced yet', () => {
+    // A 52-week code is dated so far out that every shorter shelf life puts
+    // production in the future. Arithmetic alone settles this one.
+    const code = optimumTasteDate(MADE, 52).printCode;
+    const r = identifyFromPrintCode(code, CATALOGUE, { today: madeOn });
+
+    expect(r.sole).toBe(true);
+    expect(r.best.weeks).toBe(52);
+    expect(r.candidates.filter((c) => c.possible)).toHaveLength(1);
+    expect(r.candidates.filter((c) => !c.possible).map((c) => c.weeks))
+      .toEqual([39, 26, 18, 13, 11]);   // nearest miss first
+  });
+
+  it('collapses products sharing a shelf life into one candidate', () => {
+    const code = optimumTasteDate(MADE, 52).printCode;
+    const r = identifyFromPrintCode(code, CATALOGUE, { today: madeOn });
+
+    expect(r.best.products.map((p) => p.name))
+      .toEqual(['Dasani (Bottles)', "Seagram's Seltzer, AHA"]);
+    // One candidate per distinct shelf life, not per product.
+    expect(r.candidates).toHaveLength(6);
+  });
+
+  it('identifies the right shelf life for a code of any age', () => {
+    // The realistic case: stock read off a pallet weeks after it ran. The
+    // answer must stay correct as the code gets older, not just on day one.
+    for (const w of [11, 13, 18, 26, 39, 52]) {
+      const code = optimumTasteDate(MADE, w).printCode;
+      const r = identifyFromPrintCode(code, CATALOGUE, { today: madeOn });
+      expect(r.best.weeks).toBe(w);
+      expect(r.best.isoDate).toBe(MADE);
+    }
+  });
+
+  it('reports age in whole days from the production date', () => {
+    const code = optimumTasteDate(MADE, 39).printCode;
+    const later = new Date('2026-04-15T12:00:00');   // 30 days after MADE
+    const r = identifyFromPrintCode(code, CATALOGUE, { today: later });
+
+    expect(r.best.weeks).toBe(39);
+    expect(r.best.ageDays).toBe(30);
+  });
+
+  it('accepts a code printed a day ahead of its shift', () => {
+    const code = optimumTasteDate(MADE, 11).printCode;
+    const dayBefore = new Date('2026-03-15T12:00:00');
+    const r = identifyFromPrintCode(code, CATALOGUE, { today: dayBefore });
+
+    expect(r.best.weeks).toBe(11);
+    expect(r.best.ageDays).toBe(-1);
+    expect(r.best.possible).toBe(true);
+  });
+
+  it('flags an expiry that has already passed', () => {
+    const code = optimumTasteDate(MADE, 11).printCode;
+    const wayLater = new Date('2027-01-04T12:00:00');
+    expect(identifyFromPrintCode(code, CATALOGUE, { today: wayLater }).expired).toBe(true);
+    expect(identifyFromPrintCode(code, CATALOGUE, { today: madeOn }).expired).toBe(false);
+  });
+
+  it('passes through the Monday-alignment check', () => {
+    // 4 June 2026 is a Thursday, so this came from somewhere else.
+    const r = identifyFromPrintCode('BBJUN0426DDC', CATALOGUE, { today: madeOn });
+    expect(r.weekAligned).toBe(false);
+    expect(identifyFromPrintCode(optimumTasteDate(MADE, 11).printCode, CATALOGUE,
+      { today: madeOn }).weekAligned).toBe(true);
+  });
+
+  it('ignores catalogue entries with no usable shelf life', () => {
+    const messy = [...CATALOGUE, { name: 'No weeks' }, { name: 'Zero', weeks: 0 },
+                   { name: 'Junk', weeks: 'abc' }];
+    const code = optimumTasteDate(MADE, 11).printCode;
+    const r = identifyFromPrintCode(code, messy, { today: madeOn });
+    expect(r.candidates).toHaveLength(6);
+  });
+
+  it('returns null on an unreadable code, and copes with no catalogue', () => {
+    expect(identifyFromPrintCode('rubbish', CATALOGUE)).toBeNull();
+    expect(identifyFromPrintCode('', CATALOGUE)).toBeNull();
+
+    const r = identifyFromPrintCode(optimumTasteDate(MADE, 11).printCode, []);
+    expect(r.candidates).toEqual([]);
+    expect(r.best).toBeNull();
+    expect(r.sole).toBe(false);
   });
 });
 

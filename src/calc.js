@@ -401,6 +401,98 @@ export function productionDateFromCode(code, weeks) {
   };
 }
 
+/**
+ * A code printed the night before the shift it belongs to would otherwise read
+ * as "made tomorrow". One day of slack keeps that from being called impossible.
+ */
+const FUTURE_GRACE_DAYS = 1;
+
+/**
+ * Which product is this code likely to be?
+ *
+ * The code carries an expiry and a production weekday — never the shelf life —
+ * so the product is genuinely not determined by it. What IS determined is the
+ * production date *per candidate shelf life*: a longer shelf life pushes the
+ * implied production date further back. Two facts then narrow the field hard:
+ *
+ *   1. A production date in the future is impossible. On a long-dated code that
+ *      rules out every short shelf life outright, often leaving one answer.
+ *   2. Product read off a line or a fresh pallet was made recently, so the
+ *      candidate implying the most recent production date is the best bet.
+ *
+ * Candidates are shelf-life groups, not single products. Several SKUs share a
+ * figure — 52 weeks covers Dasani bottles and Seagram's Seltzer alike — and no
+ * amount of arithmetic separates them, so the group is as fine as this gets.
+ *
+ * @param {string} code  print code, e.g. "BBJUN0126DDC"
+ * @param {Array<{name:string, weeks:number, category?:string}>} catalogue
+ * @param {{today?:Date}} [options]
+ * @returns {{expiry:Date, dayName:string, expired:boolean, weekAligned:boolean,
+ *            sole:boolean, best:object|null, candidates:object[]}|null}
+ */
+export function identifyFromPrintCode(code, catalogue, { today = new Date() } = {}) {
+  const parsed = parsePrintCode(code);
+  if (!parsed) return null;
+
+  // Anchor both ends of the subtraction at noon so the day count is whole and
+  // a daylight-saving boundary can't shift it, matching optimumTasteDate().
+  const noonToday = new Date(today.getFullYear(), today.getMonth(),
+                             today.getDate(), 12, 0, 0);
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  // Group the catalogue by shelf life; the code can only ever identify a group.
+  const byWeeks = new Map();
+  for (const entry of catalogue || []) {
+    const w = Number(entry && entry.weeks);
+    if (!(w > 0)) continue;
+    const group = byWeeks.get(w) || { weeks: w, products: [] };
+    group.products.push({
+      name: String(entry.name ?? ''),
+      category: entry.category,
+    });
+    byWeeks.set(w, group);
+  }
+
+  const candidates = [...byWeeks.values()].map((group) => {
+    const r = productionDateFromCode(code, group.weeks);
+    const ageDays = Math.round((noonToday.getTime() - r.prodDate.getTime()) / DAY_MS);
+    return {
+      ...group,
+      products: group.products.slice().sort((a, b) => a.name.localeCompare(b.name)),
+      prodDate: r.prodDate,
+      isoDate: r.isoDate,
+      display: r.display,
+      dayName: r.dayName,
+      ageDays,
+      // Negative age means the line would not have run yet.
+      possible: ageDays >= -FUTURE_GRACE_DAYS,
+    };
+  });
+
+  // Possible readings first, most recently produced first — that is the whole
+  // ranking. Impossible ones stay in the list, nearest-miss first, because
+  // seeing them ruled out is what makes the surviving answer trustworthy.
+  candidates.sort((a, b) => {
+    if (a.possible !== b.possible) return a.possible ? -1 : 1;
+    return a.possible ? a.ageDays - b.ageDays : b.ageDays - a.ageDays;
+  });
+
+  const possible = candidates.filter((c) => c.possible);
+
+  return {
+    expiry: parsed.expiry,
+    dayName: parsed.dayName,
+    expired: parsed.expiry.getTime() < noonToday.getTime(),
+    // An expiry that isn't a Monday didn't come from this plant's system, so
+    // every reading below is a guess about someone else's numbering.
+    weekAligned: parsed.expiry.getDay() === 1,
+    // One survivor is the strong case: arithmetic alone settled it.
+    sole: possible.length === 1,
+    best: possible[0] || null,
+    candidates,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Water line (Dasani) — salts tank
 // ---------------------------------------------------------------------------
