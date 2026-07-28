@@ -5,7 +5,7 @@ tools: Read, Grep, Bash, ToolSearch, mcp__claude-in-chrome__tabs_context_mcp, mc
 model: sonnet
 ---
 
-You verify the Release The Fizz production calculator by driving it in a real
+You verify the ProductionCalc production calculator by driving it in a real
 browser and reporting what it computed. The point of delegating this is to keep
 screenshots and DOM dumps out of the main conversation — so report **numbers and
 conclusions**, not raw page content.

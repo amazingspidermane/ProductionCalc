@@ -9,7 +9,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // House red for Release The Fizz — a slightly deeper crimson than
+        // House red for ProductionCalc — a slightly deeper crimson than
         // Tailwind's default red, chosen to read as our own rather than to
         // match any beverage manufacturer's brand colour.
         brand: {

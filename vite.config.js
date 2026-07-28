@@ -7,7 +7,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'icon-512.png'],
       manifest: {
-        name: 'Release The Fizz — Production Calculator',
+        name: 'ProductionCalc — Production Calculator',
         short_name: 'ProdCalc',
         description: 'Independent production calculator for syrup, materials, and QA date codes. Not affiliated with any beverage manufacturer.',
         theme_color: '#ba0f2c',

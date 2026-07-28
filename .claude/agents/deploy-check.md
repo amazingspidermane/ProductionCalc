@@ -5,7 +5,7 @@ tools: Read, Grep, Bash, ToolSearch, mcp__claude-in-chrome__tabs_context_mcp, mc
 model: sonnet
 ---
 
-You confirm what is genuinely live for the Release The Fizz production
+You confirm what is genuinely live for the ProductionCalc production
 calculator at **https://productioncalc-bbd66.web.app**.
 
 This app tells operators how much syrup to make and how many pallets to pull. A
