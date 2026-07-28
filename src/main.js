@@ -50,6 +50,7 @@ import {
   overallDataStatus,
   describeDataStatus,
 } from './data-status.js';
+import { initPwaUpdate } from './pwa-update.js';
 import { initializeApp } from "firebase/app";
 import {
   getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
@@ -177,6 +178,7 @@ async function init() {
     initNavCondense();
     initCopyButtons();
     initCodeGuess();
+    initPwaUpdateBanner();
     initAdminControls();
 
     // Safety net: Populate immediately from defaults so the app never crashes
@@ -502,6 +504,59 @@ function initCopyButtons() {
       flashCopied(summaryBtn);
     });
   }
+}
+
+/**
+ * Dismissing the prompt can't be permanent.
+ *
+ * The problem being solved is a device left running for hours, so a "Later"
+ * that lasted the rest of the shift would recreate exactly that. Ask again.
+ */
+const UPDATE_RESHOW_MS = 60 * 60 * 1000;   // 1 hour
+
+/** Offer the new build, and let the operator pick when to take it. */
+function initPwaUpdateBanner() {
+  const banner = document.getElementById('pwa-update-banner');
+  const reloadBtn = document.getElementById('pwa-update-reload');
+  const laterBtn = document.getElementById('pwa-update-later');
+  if (!banner) return;
+
+  let applyUpdate = null;
+  let reshowTimer = null;
+
+  const show = () => {
+    banner.classList.remove('translate-y-full');
+    // Two banners stacked at the bottom would cover each other; the update is
+    // the one that matters.
+    document.getElementById('pwa-install-banner')?.classList.add('translate-y-full');
+  };
+  const hide = () => banner.classList.add('translate-y-full');
+
+  // Bound once, not inside onNeedRefresh — a second deploy landing in the same
+  // session fires that again and would stack a duplicate listener.
+  reloadBtn?.addEventListener('click', () => {
+    if (!applyUpdate) return;
+    reloadBtn.disabled = true;
+    reloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1" aria-hidden="true"></i>Updating…';
+    // Work in progress is already persisted on input and again on pagehide, so
+    // the reload comes back to the same numbers.
+    saveSession();
+    applyUpdate();
+  });
+
+  laterBtn?.addEventListener('click', () => {
+    hide();
+    clearTimeout(reshowTimer);
+    reshowTimer = setTimeout(show, UPDATE_RESHOW_MS);
+  });
+
+  initPwaUpdate({
+    onNeedRefresh(apply) {
+      applyUpdate = apply;
+      show();
+      announce('A new version of the calculator is ready. Reload to update.');
+    },
+  });
 }
 
 /**

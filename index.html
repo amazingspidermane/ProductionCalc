@@ -687,6 +687,26 @@
   </div>
 </footer>
 
+<!-- New build available. Sits above the install banner: an operator running stale
+     code matters more than one who hasn't added the app to their home screen. -->
+<div id="pwa-update-banner" class="fixed bottom-0 inset-x-0 z-[210] translate-y-full transition-transform duration-500 ease-out" role="status" aria-live="polite">
+  <div class="max-w-xl mx-auto px-4 pb-6">
+    <div class="rounded-2xl shadow-panel border border-white/10 p-5 flex items-center gap-4 bg-gradient-to-r from-slate-900 to-slate-800">
+      <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-500 to-brand-800 flex items-center justify-center flex-shrink-0">
+        <i class="fas fa-arrows-rotate text-white text-lg" aria-hidden="true"></i>
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="text-white font-bold text-sm">New version ready</p>
+        <p class="text-slate-400 text-xs mt-0.5">This device is running an older build. Reload to update — your numbers are kept.</p>
+      </div>
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <button id="pwa-update-later" type="button" class="text-slate-400 hover:text-slate-200 text-xs font-bold px-3 py-2 rounded-lg transition-colors">Later</button>
+        <button id="pwa-update-reload" type="button" class="btn-primary text-xs px-4 py-2.5">Reload</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- PWA Install Banner -->
 <div id="pwa-install-banner" class="fixed bottom-0 inset-x-0 z-[200] translate-y-full transition-transform duration-500 ease-out">
   <div class="max-w-xl mx-auto px-4 pb-6">

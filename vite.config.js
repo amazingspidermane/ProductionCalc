@@ -4,7 +4,14 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig({
   plugins: [
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt', not 'autoUpdate'. autoUpdate only swaps the bundle on the next
+      // full load, so a phone left open through a shift keeps running old code
+      // with nothing on screen to say so. src/pwa-update.js checks for new
+      // builds and asks; the operator picks the moment to reload.
+      registerType: 'prompt',
+      // Registration happens in app code via `virtual:pwa-register` so it can
+      // own the update checks — no injected registerSW.js to double-register.
+      injectRegister: null,
       includeAssets: ['icon.svg', 'icon-512.png'],
       manifest: {
         name: 'ProductionCalc — Production Calculator',
