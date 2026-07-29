@@ -42,7 +42,12 @@
 <div id="fizz-container" class="fizz-container" aria-hidden="true"></div>
 
 <!-- WEBSITE NAVBAR -->
-<nav id="site-nav" class="sticky top-0 z-50 border-b bg-slate-900/85 border-white/10 backdrop-blur-2xl shadow-panel">
+<!-- Opaque, not frosted. A translucent sticky bar relies on backdrop-filter to
+     blur what scrolls behind it, and Chromium does not apply the blur to
+     compositor-scrolled content underneath a sticky element — so the remaining
+     transparency showed sharp, readable text sliding through the header on both
+     mobile and desktop. Solid background, no backdrop-blur, no ghosting. -->
+<nav id="site-nav" class="sticky top-0 z-50 border-b bg-slate-900 border-white/10 shadow-panel">
   <div class="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-brand-800 via-brand-500 to-brand-800"></div>
 
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -223,7 +228,9 @@
 
   <div class="glass-panel overflow-visible min-h-[500px]">
     <!-- Main Tabs -->
-    <div class="tab-strip flex border-b overflow-x-auto sticky z-40 rounded-t-2xl border-slate-200/60 bg-white/80 dark:border-slate-700/60 dark:bg-slate-900/85 backdrop-blur-md" role="tablist">
+    <!-- Opaque for the same reason as #site-nav above: this strip is sticky, so
+         a translucent background leaks the content scrolling beneath it. -->
+    <div class="tab-strip flex border-b overflow-x-auto sticky z-40 rounded-t-2xl border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-900" role="tablist">
       <button onclick="switchTab('syrup')" type="button" id="tab-syrup" role="tab" aria-controls="content-syrup" aria-selected="true" class="nav-tab active flex-1 py-4 px-6 text-center font-bold text-sm sm:text-base flex items-center justify-center gap-2 min-w-max">
         <i class="fas fa-wine-bottle" aria-hidden="true"></i> Syrup
       </button>
