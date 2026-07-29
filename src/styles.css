@@ -318,13 +318,21 @@ body.nav-condensed .tab-strip {
   animation-delay: var(--delay);
 }
 
-/* Dark sits on #0b1120, where plain white already reads as glass — no tint
-   needed, just less of it. Restates `box-shadow` deliberately: inheriting the
-   light rule's would leak red insets onto a dark backdrop. */
+/* Dark carries the same brand tint, mixed differently: brand-700 goes muddy
+   against #0b1120, so the tint here is the brighter brand-500, and the light
+   rule's drop shadow becomes an outward glow — a shadow reads as nothing on a
+   dark backdrop. Restates every property the light rule sets so none of its
+   light-tuned values leak through. */
 .dark .bubble {
-  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.06) 50%, transparent 100%);
-  border: 1.5px solid rgba(255, 255, 255, 0.22);
-  box-shadow: inset -2px -2px 6px rgba(0, 0, 0, 0.04), inset 2px 2px 6px rgba(255, 255, 255, 0.8);
+  background: radial-gradient(circle at 35% 35%,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(248, 51, 77, 0.16) 45%,
+    rgba(248, 51, 77, 0.26) 100%);
+  border: 1.5px solid rgba(248, 51, 77, 0.42);
+  box-shadow:
+    inset -2px -2px 6px rgba(186, 15, 44, 0.3),
+    inset 2px 2px 6px rgba(255, 255, 255, 0.55),
+    0 0 6px rgba(248, 51, 77, 0.18);
 }
 
 @keyframes rise {
