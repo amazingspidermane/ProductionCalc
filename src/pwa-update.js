@@ -49,19 +49,39 @@ export function shouldCheck(lastCheck, now, isOnline) {
  * @param {function} handlers.onNeedRefresh  called with an `apply()` that
  *   activates the waiting worker and reloads the page
  * @param {function} [handlers.onOfflineReady]
- * @returns {function} force an update check now
+ * @returns {{check: function, apply: function, isWaiting: function}}
  */
 export function initPwaUpdate({ onNeedRefresh, onOfflineReady } = {}) {
   let updateSW = null;
+  let registration = null;
   let lastCheck = Date.now();
+  /**
+   * Set the moment a new worker starts installing.
+   *
+   * `registration.waiting` is the wrong thing to poll on its own: a worker that
+   * is still downloading is neither waiting nor absent, so a caller checking
+   * too early concludes there is no update and says so, moments before the
+   * banner contradicts it. 'updatefound' is the earliest honest signal.
+   */
+  let updateFound = false;
 
-  const checkNow = (registration) => {
+  /**
+   * @param {boolean} force  skip the throttle — someone pressed a button, and
+   *   an answer they asked for is worth a request they can't otherwise trigger.
+   */
+  const checkNow = (force = false) => {
+    if (!registration) return Promise.resolve(false);
     // navigator.onLine is only a hint, but a false reading is reliable enough
     // to skip a request that would certainly fail.
-    if (!shouldCheck(lastCheck, Date.now(), navigator.onLine !== false)) return;
+    if (!force && !shouldCheck(lastCheck, Date.now(), navigator.onLine !== false)) {
+      return Promise.resolve(false);
+    }
     lastCheck = Date.now();
+    // Judge this check on its own result, not on one from ten minutes ago. A
+    // worker already waiting still reports through registration.waiting below.
+    if (force) updateFound = false;
     // Nothing to report and nothing to retry, so failures are swallowed.
-    registration.update().catch(() => {});
+    return registration.update().then(() => true).catch(() => false);
   };
 
   updateSW = registerSW({
@@ -77,20 +97,23 @@ export function initPwaUpdate({ onNeedRefresh, onOfflineReady } = {}) {
       if (onOfflineReady) onOfflineReady();
     },
 
-    onRegisteredSW(swUrl, registration) {
-      if (!registration) return;
+    onRegisteredSW(swUrl, reg) {
+      if (!reg) return;
+      registration = reg;
 
-      setInterval(() => checkNow(registration), UPDATE_INTERVAL_MS);
+      reg.addEventListener('updatefound', () => { updateFound = true; });
+
+      setInterval(() => checkNow(), UPDATE_INTERVAL_MS);
 
       // The case the timer alone misses: the app sat backgrounded for hours and
       // is picked up mid-shift. Browsers throttle timers in hidden tabs, so
       // coming back to the foreground is the more reliable signal of the two.
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) checkNow(registration);
+        if (!document.hidden) checkNow();
       });
 
       // Coming back onto plant wifi is the first moment a check can succeed.
-      window.addEventListener('online', () => checkNow(registration));
+      window.addEventListener('online', () => checkNow());
     },
 
     onRegisterError(error) {
@@ -99,5 +122,12 @@ export function initPwaUpdate({ onNeedRefresh, onOfflineReady } = {}) {
     },
   });
 
-  return () => updateSW && updateSW(true);
+  return {
+    /** Ask the server now, throttle ignored. */
+    check: () => checkNow(true),
+    /** Activate the waiting worker and reload. */
+    apply: () => updateSW && updateSW(true),
+    /** Is a new build waiting, or on its way in? */
+    hasUpdate: () => updateFound || !!(registration && registration.waiting),
+  };
 }

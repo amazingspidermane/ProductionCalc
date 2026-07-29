@@ -179,6 +179,7 @@ async function init() {
     initCopyButtons();
     initCodeGuess();
     initPwaUpdateBanner();
+    initBuildStamp();
     initAdminControls();
 
     // Safety net: Populate immediately from defaults so the app never crashes
@@ -514,6 +515,15 @@ function initCopyButtons() {
  */
 const UPDATE_RESHOW_MS = 60 * 60 * 1000;   // 1 hour
 
+/**
+ * Backstop for the reload. Long enough that the normal handover wins the race
+ * and this never fires, short enough that a stuck button isn't left on screen.
+ */
+const UPDATE_RELOAD_FALLBACK_MS = 3000;
+
+/** Set once the service worker is registered; the footer stamp checks through it. */
+let pwa = null;
+
 /** Offer the new build, and let the operator pick when to take it. */
 function initPwaUpdateBanner() {
   const banner = document.getElementById('pwa-update-banner');
@@ -542,6 +552,12 @@ function initPwaUpdateBanner() {
     // the reload comes back to the same numbers.
     saveSession();
     applyUpdate();
+
+    // applyUpdate() reloads once the new worker takes control — but a page that
+    // no worker controls yet, which is every first visit, never sees that
+    // handover and would sit on "Updating…" indefinitely. The worker activates
+    // regardless, so reloading anyway picks up the new build.
+    setTimeout(() => window.location.reload(), UPDATE_RELOAD_FALLBACK_MS);
   });
 
   laterBtn?.addEventListener('click', () => {
@@ -550,12 +566,63 @@ function initPwaUpdateBanner() {
     reshowTimer = setTimeout(show, UPDATE_RESHOW_MS);
   });
 
-  initPwaUpdate({
+  pwa = initPwaUpdate({
     onNeedRefresh(apply) {
       applyUpdate = apply;
       show();
       announce('A new version of the calculator is ready. Reload to update.');
     },
+  });
+}
+
+/**
+ * Stamp the running build into the footer, and let it be tapped to check.
+ *
+ * Two jobs, one control. The stamp answers "did the deploy reach this device?"
+ * without anyone comparing bundle hashes against the server — the only way to
+ * ask that on a phone. Tapping it forces an update check, which is the recovery
+ * path when a device has been sitting on a cached build: no need to hunt for
+ * how to fully close an installed app.
+ */
+function initBuildStamp() {
+  const el = document.getElementById('build-stamp');
+  if (!el) return;
+
+  const built = new Date(__BUILD_TIME__);
+  const when = isNaN(built.getTime())
+    ? ''
+    : built.toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+
+  const label = `build ${__BUILD_ID__}${when ? ` · ${when}` : ''}`;
+  el.textContent = label;
+
+  el.addEventListener('click', async () => {
+    if (!pwa) {
+      toast('info', 'Updates are unavailable here');
+      return;
+    }
+    el.disabled = true;
+    el.textContent = 'checking…';
+
+    await pwa.check();
+
+    // Poll rather than waiting a fixed interval. Downloading a worker on plant
+    // wifi can outlast any timeout short enough to feel responsive, and
+    // announcing "up to date" a second before the update banner appears is
+    // worse than taking slightly longer to answer.
+    const deadline = Date.now() + 8000;
+    while (!pwa.hasUpdate() && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    // A find announces itself through the banner; only silence needs a word.
+    if (!pwa.hasUpdate()) {
+      toast('success', `Up to date — ${__BUILD_ID__}`);
+    }
+    el.disabled = false;
+    el.textContent = label;
   });
 }
 
