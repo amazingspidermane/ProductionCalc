@@ -44,17 +44,36 @@ curl -s https://productioncalc-bbd66.web.app/ | grep -o 'assets/index-[A-Za-z0-9
 ls dist/assets/index-*.js
 ```
 
-**2. Browser vs server bundle — the one that catches false all-clears.** The
-service worker (`registerType: 'autoUpdate'`) can serve the *previous* build on
-the first load after a deploy. So:
+**2. The build stamp — the quickest honest answer.** The footer button
+`#build-stamp` names the commit the running bundle was built from
+(`__BUILD_ID__` is `git rev-parse --short HEAD` at build time, see
+`vite.config.js`). Read `document.getElementById('build-stamp').textContent` and
+compare it with local `git rev-parse --short HEAD`. Matching stamps are strong
+evidence; a stale stamp tells you immediately that you are looking at old code.
+
+**3. Browser vs server bundle — the one that catches false all-clears.** The
+service worker is **`registerType: 'prompt'`** (`vite.config.js`), registered by
+`src/pwa-update.js`. A new worker installs and then **waits**: the page keeps
+running the old bundle until either the operator accepts the update banner
+(`updateSW(true)` posts SKIP_WAITING and reloads) or every tab for the origin is
+closed.
+
+So:
 
 - Load the site, wait ~3s, read the bundle the page is actually running:
   `[...document.querySelectorAll('script[src]')].map(s => s.src.split('/').pop())`
-- If it differs from the server's, **reload and read it again.**
+- If it differs from the server's, **do not just reload** — a waiting worker
+  does not activate while the tab it would replace is still open, so reloading
+  the same tab can return the old bundle indefinitely. Close every tab on the
+  origin and open a fresh one, then read again.
 - Report which bundle produced every number you quote. If you never saw the new
   bundle, say the verification failed — do not report the old result as current.
 
-**3. A known calculation.** Confirm the app still computes correctly, not merely
+A stale browser bundle here is **not** evidence of a bad deploy. Check the
+server bundle (step 1) before concluding anything: server new + browser old is
+the service worker behaving exactly as designed.
+
+**4. A known calculation.** Confirm the app still computes correctly, not merely
 that it loaded. Reliable fixture — on the Materials tab, select
 `12oz Can Film Trays (35-Pack)` and enter `5000`:
 
@@ -68,14 +87,16 @@ that it loaded. Reliable fixture — on the Materials tab, select
 Results are animated — **wait ~800ms after calling `calculateMaterial('target')`
 before reading**, or you will read `0.00`.
 
-**4. Structure present.** Confirm the expected elements exist: `tab-runplan`,
+**5. Structure present.** Confirm the expected elements exist: `tab-runplan`,
 `run-pack-lines`, `lookup-code`, `mat-select`.
 
-**5. Console clean.** `read_console_messages` with `onlyErrors: true`.
+**6. Console clean.** `read_console_messages` with `onlyErrors: true`.
 
-If the chrome tools are unavailable, you can still do steps 1, 4 and 5 with
-`curl`. Say clearly that you could not confirm the browser-side bundle, because
-that is precisely the check that catches the stale-cache failure.
+If the chrome tools are unavailable, `curl` gets you steps 1 and 5 only.
+Everything else needs a browser: the build stamp and the calculation are
+rendered by JS, and the console cannot be read without one. Say clearly that you
+could not confirm the browser-side bundle, because that is precisely the check
+that catches the stale-cache failure.
 
 ## Reporting
 
@@ -83,9 +104,15 @@ State plainly: **what is live**, which bundle, and whether the known calculation
 was right. Then note anything the user needs to act on:
 
 - If the tree was dirty, name the uncommitted files.
-- If the service worker served a stale bundle, say so — and remind them that
-  operators will need one reload, and anyone with the PWA installed should close
-  and reopen it. During that window two people can see different numbers for the
-  same material.
+- If the service worker served a stale bundle, say so — and describe what the
+  floor will actually see. Devices are **not** reloaded automatically: each one
+  checks for a new build every 30 minutes, whenever the app is brought back to
+  the foreground, and whenever it comes back online (throttled to one check per
+  5 minutes — `src/pwa-update.js`). When a build is found the operator gets a
+  banner and chooses when to take it; tapping the footer build stamp forces a
+  check immediately. So a rollout is gradual by design, and during that window
+  two people can see different numbers for the same material. If a fix is urgent
+  enough that the wait is unacceptable, say so plainly — someone has to tell the
+  floor to tap the stamp.
 
 Never say "verified" unless you saw the new bundle produce the correct number.

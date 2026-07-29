@@ -47,12 +47,23 @@ These have all produced wrong conclusions before. Respect them.
    output; do not report a label/value mismatch as a bug — verify by reloading
    (the app syncs labels on load) before claiming anything.
 
-3. **The live URL may serve a stale bundle.** The service worker can hand you the
-   previous build on first load after a deploy. Always read the bundle filename
-   (`[...document.querySelectorAll('script[src]')].map(s => s.src)`) and compare
-   it with what the server serves (`curl -s <url> | grep -o 'assets/index-[A-Za-z0-9_-]*\.js'`).
-   If they differ, **reload and re-check** before reporting. Never report a live
-   result without confirming which bundle produced it.
+3. **The live URL may serve a stale bundle.** The service worker is
+   `registerType: 'prompt'` (`vite.config.js`), so after a deploy the new worker
+   installs and **waits** — the page keeps running the old bundle until the
+   update banner is accepted or every tab on the origin is closed. Reloading the
+   same tab does *not* reliably pick up the new build.
+
+   Fastest check: `document.getElementById('build-stamp').textContent` names the
+   commit the running bundle was built from — compare it with
+   `git rev-parse --short HEAD`. Confirm against the bundle filename
+   (`[...document.querySelectorAll('script[src]')].map(s => s.src)`) versus what
+   the server serves
+   (`curl -s <url> | grep -o 'assets/index-[A-Za-z0-9_-]*\.js'`).
+
+   If they differ, close every tab on the origin and open a fresh one, then
+   re-check. Never report a live result without confirming which build produced
+   it — and never call a stale browser bundle a broken deploy without checking
+   what the server is serving.
 
 4. **State persists.** Run Plan rows live in `localStorage` under
    `prodcalc.runLines.v1`, general session state under `prodcalc.session.v1`.
@@ -68,6 +79,7 @@ These have all produced wrong conclusions before. Respect them.
   `run-total-cases`, `run-gals`, `run-plts`, `run-lines`, `run-summary`
 - QA Codes: `datecode-product`, `datecode-date`, `datecode-result`,
   `datecode-print`, `lookup-code`, `lookup-product`, `lookup-result`
+- Build/update: `build-stamp` (names the running commit), `pwa-update-banner`
 
 ## Rules
 
