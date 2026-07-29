@@ -29,15 +29,28 @@ the case is still 24. So:
 - Using 6 or 12 as a pack size quarters or halves the standard cases *and the
   syrup with them*. `src/calc.test.js` pins both failure modes deliberately.
 
-**`stdCaseFactor` is how many standard cases one physical case of a material
-makes.** A 35-pack film tray wraps 35 cans, so its factor is 35/24 ≈ 1.4583.
-Most materials are already 24-based and carry no factor (treated as 1).
+**`stdCaseFactor` marks a material as a *pre-formed pack*.** A 35-pack film tray
+arrives from the shipper already built for one 35-pack, so its factor is
+35/24 ≈ 1.4583. Only the 30 and 35-pack film trays carry one.
 
-To go from a standard-case target to material units you must divide by the
-factor first — that is what `materialUnitsForStandardCases()` does.
-`materialUnitsForCases()` takes the material's *own physical* cases and is the
-wrong function for anything driven by a standard-case target. Confusing the two
-over-pulls by ~46% on the film trays.
+**Materials are pulled by one of two rules, and `isPreformedPack()` picks.**
+
+- A **pre-formed pack** is pulled **one per pack, never converted**. 5,000
+  35-packs needs 5,000 trays — a pallet holds 1,600 of them, so 3.125 pallets.
+  The Materials tab target is a count of *packs*, and `materialUnitsForCases()`
+  is the right function there.
+- **Everything else** — caps, labels — is consumed per can and follows the run's
+  volume in standard cases. A 35-pack line puts 35 caps on a pack, not 24, so
+  driving caps off the pack count under-pulls them by about a third.
+
+`materialUnitsForLine()` applies this split for the run plan. Do not "restore"
+a 24-baseline conversion on the Materials tab or on a pre-formed pack: that was
+the old behaviour and it asked for 3,429 trays where 5,000 were needed.
+
+Note the naming trap: a material called **"(6-Pack)" or "(12-Pack)" is still a
+24-count case** — 6x4 and 12x2. Those are correctly factor-less. Only a pack
+that genuinely isn't 24 cans (18, 20, 30, 35) needs a factor, and an 18-pack
+would need 18/24 = 0.75.
 
 **Date codes.** Shelf life runs in whole weeks from the **Monday** of the
 production week, so a print code this plant generates **always expires on a

@@ -16,7 +16,7 @@ import {
   casesPerMaterialUnit,
   materialUnitsForCases,
   casesFromMaterialUnits,
-  packFactorOf,
+  isPreformedPack,
   materialUnitsForStandardCases,
   standardCasesFromMaterialUnits,
   unitsToPull,
@@ -2260,18 +2260,25 @@ function updateMaterial() {
      return;
   }
 
-  // Yield in standard 24-cases, so it lines up with the Syrup tab and the Run
-  // Plan. For a 35-pack tray that is more than its raw case count, because each
-  // physical tray covers 35/24 of a standard case.
-  const factor = packFactorOf(data);
-  const yieldVal = casesPerMaterialUnit(data) * factor;
-  yieldEl.innerText = fmt(yieldVal) + " Cases";
+  // Yield as the count that comes on one unit — 1,600 trays a pallet, not the
+  // 2,333.33 standard cases those trays eventually fill. The pallet is the
+  // thing an operator can walk out and count, so it is the thing to show.
+  //
+  // The noun has to follow the material: a tray is counted in packs, but caps
+  // and labels are consumed per can and are still counted in standard cases.
+  const preformed = isPreformedPack(data);
+  const yieldVal = casesPerMaterialUnit(data);
+  yieldEl.innerText = fmt(yieldVal) + (preformed ? " Packs" : " Cases");
+  const yieldHint = document.getElementById("mat-yield-hint");
+  if (yieldHint) {
+    yieldHint.innerText = preformed
+      ? "Packs per unit, as received"
+      : "Standard cases (24pk) per unit";
+  }
 
   const matNumberStr = data.number ? `[${data.number}] ` : "";
-  // Only worth saying when the material isn't already on a 24 baseline.
-  const packNote = factor !== 1
-      ? ` · ${fmt(factor)}× pack factor applied`
-      : "";
+  // No pack-factor note: this screen no longer converts to the 24 baseline.
+  const packNote = "";
   badge.innerText = data.boxesPerPallet
       ? `${matNumberStr}${data.desc} · ${data.boxesPerPallet} boxes × ${data.unitsPerBox} units = ${fmt(data.unitsPerPallet, { decimals: 0 })} total${packNote}`
       : `${matNumberStr}${data.desc} · ${fmt(data.unitsPerPallet, { decimals: 0 })} total units/pallet${packNote}`;
@@ -2310,15 +2317,23 @@ function calculateMaterial(source = 'target') {
     return;
   }
 
-  // Both directions work in standard 24-cases, matching the Syrup tab and the
-  // Run Plan. For a material whose pack isn't 24 — the 30 and 35-pack film
-  // trays — stdCaseFactor is what keeps this screen from over-pulling.
+  // Both directions work in the material's OWN packs, not standard 24-cases.
+  //
+  // A film tray arrives from the shipper as a pre-formed pack: one 35-pack tray
+  // holds one 35-pack, so 5,000 35-packs needs 5,000 trays and nothing needs
+  // converting. Running the 24-baseline conversion here asked for 3,429 trays
+  // instead — a pallet short — because it answered "how many trays cover 5,000
+  // standard cases", which is not the question this screen is asked.
+  //
+  // The Run Plan is different and still converts: there you enter pack counts
+  // per line, and the syrup volume genuinely needs the 24-equivalent. It ends
+  // up back at the same physical tray count, so the two screens agree.
   if (source === 'onhand') {
     units = readNumericField("mat-onhand");
-    const cases = standardCasesFromMaterialUnits(data, units);
+    const cases = casesFromMaterialUnits(data, units);
     if (targetEl) targetEl.value = cases > 0 ? fmt(cases) : "";
   } else {
-    units = materialUnitsForStandardCases(data, readNumericField("mat-target"));
+    units = materialUnitsForCases(data, readNumericField("mat-target"));
     if (onhandEl) onhandEl.value = units > 0 ? fmt(units) : "";
   }
 
@@ -2649,9 +2664,10 @@ function calculateRunPlan() {
     const note = line.pull
       ? (line.pull.exactlyFull ? 'Exactly full — no partial unit.' : `${line.pull.lastUsedPct}% of the last one used.`)
       : '';
-    // Only worth mentioning when the material isn't already on a 24 baseline.
-    const packNote = line.packFactor !== 1
-      ? `<span class="field-hint block mt-1">Pack factor ${fmt(line.packFactor)} applied.</span>`
+    // Say which rule produced the number. A pre-formed tray is pulled one per
+    // pack; everything else follows the run's volume in standard cases.
+    const packNote = line.preformed
+      ? `<span class="field-hint block mt-1">Pre-formed pack — pulled 1 per pack.</span>`
       : '';
 
     return `<div class="calc-card">

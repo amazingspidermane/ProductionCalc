@@ -860,16 +860,43 @@ describe('standardCasesFromMaterialUnits', () => {
 
 // The Materials tab and the Run Plan must not disagree about the same material.
 describe('Materials tab and Run Plan agree', () => {
-  it('gives the same pull for the same standard-case target', () => {
+  it('gives the same pull for the same number of packs', () => {
+    const plan = buildRunPlan({
+      product: CAN_12OZ,
+      lines: [{ count: 5000, packSize: 35, materials: ['Film35'] }],
+      materialsDb: { Film35: TRAY_35PK },
+    });
+    // 5,000 35-packs on the Materials tab must produce the figure the Run Plan
+    // reports for a 5,000-pack line: one pre-formed tray per pack.
+    expect(materialUnitsForCases(TRAY_35PK, 5000))
+      .toBeCloseTo(plan.materials[0].units, 9);
+    expect(plan.materials[0].units).toBeCloseTo(5000 / 1600, 9);   // 3.125 pallets
+  });
+
+  it('pulls one tray per pack even if the line is set to another pack size', () => {
     const plan = buildRunPlan({
       product: CAN_12OZ,
       lines: [{ count: 5000, packSize: 24, materials: ['Film35'] }],
       materialsDb: { Film35: TRAY_35PK },
     });
-    // 5,000 standard cases entered on the Materials tab must produce the same
-    // figure the Run Plan reports for a 5,000 standard-case run.
-    expect(materialUnitsForStandardCases(TRAY_35PK, 5000))
-      .toBeCloseTo(plan.materials[0].units, 9);
+    // A tray arrives pre-formed, so demand follows the pack count rather than
+    // the 24-baseline volume. The old conversion asked for 2.14 pallets here —
+    // a pallet short of what the line can actually fill.
+    expect(plan.materials[0].units).toBeCloseTo(3.125, 9);
+  });
+
+  it('still drives per-can materials off the volume, not the pack count', () => {
+    // Caps go on every can, so a 35-pack line consumes 35 per pack, not 24.
+    // Pulling these per pack would under-pull by nearly a third.
+    const plan = buildRunPlan({
+      product: CAN_12OZ,
+      lines: [{ count: 5000, packSize: 35, materials: ['Caps'] }],
+      materialsDb: { Caps: CAPS_BOX },
+    });
+    expect(plan.materials[0].units)
+      .toBeCloseTo(materialUnitsForCases(CAPS_BOX, 5000 * 35 / 24), 9);
+    expect(plan.materials[0].units)
+      .toBeGreaterThan(materialUnitsForCases(CAPS_BOX, 5000));
   });
 });
 

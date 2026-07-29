@@ -224,6 +224,46 @@ export function standardCasesFromMaterialUnits(material, units) {
 }
 
 /**
+ * Material units one pack line consumes.
+ *
+ * Two kinds of material, and they scale with different things:
+ *
+ * - A **pre-formed pack** — a film tray — arrives from the shipper already
+ *   built for one pack. A line of 5,000 35-packs needs 5,000 trays, whatever
+ *   that works out to in 24-baseline volume. `stdCaseFactor` is what marks a
+ *   material as this kind, so it now selects the rule rather than scaling the
+ *   answer.
+ * - **Everything else** — caps, labels — is consumed per can, so it scales with
+ *   the line's volume. A 35-pack line puts 35 caps on every pack, not 24, and
+ *   driving caps off the pack count would under-pull them by a third.
+ *
+ * Where a tray's own pack size matches the line's, both rules give the same
+ * number; they diverge only when a line is pointed at a tray built for some
+ * other pack size, and there the pack count is the one that can be filled.
+ */
+export function materialUnitsForLine(material, line) {
+  if (!material || !line) return 0;
+  return isPreformedPack(material)
+    ? materialUnitsForCases(material, line.count)
+    : materialUnitsForCases(material, line.stdCases);
+}
+
+/**
+ * Does this material arrive already built for one pack?
+ *
+ * A film tray does: one 35-pack tray holds one 35-pack, so it is counted in
+ * packs. Caps and labels do not — they are consumed per can and are counted in
+ * standard cases. `stdCaseFactor` is only ever set on the pre-formed packs, so
+ * it doubles as the marker. Both the Materials tab wording and the run-plan
+ * arithmetic read this, so they cannot drift apart.
+ */
+export function isPreformedPack(material) {
+  return !!material
+    && Number.isFinite(material.stdCaseFactor)
+    && material.stdCaseFactor > 0;
+}
+
+/**
  * Everything a run needs: syrup volume plus every material to pull.
  *
  * A run is rarely one pack size. 10,000 35-packs plus 2,000 18-packs plus
@@ -260,7 +300,7 @@ export function buildRunPlan({ product, lines, materialsDb } = {}) {
   for (const line of packLines) {
     for (const name of line.materials) {
       const entry = totals.get(name) || { name, data: db[name], units: 0 };
-      entry.units += materialUnitsForStandardCases(db[name], line.stdCases);
+      entry.units += materialUnitsForLine(db[name], line);
       totals.set(name, entry);
     }
   }
@@ -272,6 +312,9 @@ export function buildRunPlan({ product, lines, materialsDb } = {}) {
       unitName: (data && data.unitName) || "Pallets",
       desc: (data && data.desc) || "",
       packFactor: packFactorOf(data),
+      // Drives the wording: a pre-formed pack was pulled one per pack, not
+      // converted through the 24 baseline.
+      preformed: isPreformedPack(data),
       casesPerUnit: casesPerMaterialUnit(data),
       // A material with no usable conversion can't be planned; the UI says so
       // rather than quietly printing a zero that looks like "none needed".
