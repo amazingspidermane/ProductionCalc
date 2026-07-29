@@ -634,6 +634,20 @@ function initBuildStamp() {
  */
 function initCodeGuess() {
   document.addEventListener('click', (e) => {
+    // Back to identifying the product from the code alone. Without this, a
+    // category picked once is stored in the session and never clears, so the
+    // suggestions become permanently unreachable on that device.
+    if (e.target.closest('#lookup-clear-category')) {
+      const select = document.getElementById('lookup-product');
+      if (!select) return;
+      select.value = '';
+      syncComboboxes();
+      lookupPrintCode();
+      saveSession();
+      announce('Category cleared. Showing what the code alone suggests.');
+      return;
+    }
+
     const btn = e.target.closest('[data-lookup-weeks]');
     if (!btn) return;
 
@@ -1834,12 +1848,15 @@ function guessRow(c) {
  * recently produced one leads, because product being read off a line or a
  * fresh pallet was made days ago, not last year.
  */
-function renderCodeGuess(code) {
+function renderCodeGuess(code, selectedWeeks = 0) {
   const guess = identifyFromPrintCode(code, Object.values(QA_CODE_DB));
   if (!guess || !guess.candidates.length) {
     return `<p class="text-xs text-slate-500 dark:text-slate-400 mt-4">Pick a category to get the production date.</p>`;
   }
 
+  // With a category chosen the exact date is already answered above, so this
+  // becomes a cross-check rather than the headline.
+  const secondary = selectedWeeks > 0;
   const best = guess.best;
   const others = guess.candidates.filter((c) => c.possible && c !== best);
   const ruledOut = guess.candidates.filter((c) => !c.possible);
@@ -1880,8 +1897,27 @@ function renderCodeGuess(code) {
     <p class="text-[11px] text-slate-400 dark:text-slate-500 mt-3 text-left">
       <i class="fas fa-ban mr-1" aria-hidden="true"></i>Ruled out: ${ruledOut.map((c) => c.weeks).sort((a, b) => a - b).join(', ')} weeks — production would not have happened yet.</p>` : '';
 
+  // Heading the section when it is a cross-check, so it never reads as a
+  // second, competing answer to the exact date above it.
+  const sectionHead = secondary ? `
+    <div class="flex items-center justify-between gap-2 mb-3">
+      <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">What the code alone suggests</p>
+      <button type="button" id="lookup-clear-category" class="text-[11px] font-bold text-brand-700 dark:text-brand-300 underline">Clear category</button>
+    </div>` : '';
+
+  // The chosen shelf life is one of these rows; marking it stops the operator
+  // having to hold "I picked 39" in their head while reading the list.
+  const chosenNote = secondary && best.weeks === selectedWeeks
+    ? `<p class="text-[11px] text-emerald-700 dark:text-emerald-300 mt-2"><i class="fas fa-check mr-1" aria-hidden="true"></i>This is the category you have selected.</p>`
+    : '';
+
+  const useBtn = best.weeks === selectedWeeks ? '' : `
+      <button type="button" data-lookup-weeks="${best.weeks}" class="btn-ghost px-3 py-2 text-xs mt-3">
+        <i class="fas fa-check mr-1" aria-hidden="true"></i>Use this category</button>`;
+
   return `
     <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 text-left">
+      ${sectionHead}
       <div class="flex items-center gap-2 mb-2">
         <span class="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-brand-100 text-brand-800 border border-brand-200 dark:bg-brand-500/15 dark:text-brand-200 dark:border-brand-800">Most likely</span>
         <span class="text-xs font-bold text-slate-500 dark:text-slate-400">${best.weeks} week shelf life</span>
@@ -1894,10 +1930,9 @@ function renderCodeGuess(code) {
         · ${escapeHtml(best.dayName)} · ${escapeHtml(describeAge(best.ageDays))}</p>
 
       <p class="text-[11px] text-slate-400 dark:text-slate-500 mt-2">${confidence}</p>
+      ${chosenNote}
       ${warnings}
-
-      <button type="button" data-lookup-weeks="${best.weeks}" class="btn-ghost px-3 py-2 text-xs mt-3">
-        <i class="fas fa-check mr-1" aria-hidden="true"></i>Use this category</button>
+      ${useBtn}
 
       ${otherRows}
       ${ruledOutNote}
@@ -1941,7 +1976,7 @@ function lookupPrintCode() {
     </div>`;
 
   if (!weeks) {
-    out.innerHTML = header + renderCodeGuess(raw);
+    out.innerHTML = header + renderCodeGuess(raw, 0);
     return;
   }
 
@@ -1975,7 +2010,8 @@ function lookupPrintCode() {
       <div class="flex items-center justify-center gap-2 mt-4">
         <button type="button" class="copy-btn" data-copy-from="lookup-proddate" data-copy-label="Production date"><i class="fas fa-copy" aria-hidden="true"></i><span>Copy date</span></button>
       </div>
-    </div>`;
+    </div>
+    ${renderCodeGuess(raw, weeks)}`;
 }
 
 function switchTab(tab) {
