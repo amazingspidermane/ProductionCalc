@@ -452,16 +452,58 @@ function initAdminControls() {
 }
 
 // --- NAVBAR CONDENSE ON SCROLL ---
+
+/**
+ * Condense and expand at different scroll positions, deliberately far apart.
+ *
+ * A single threshold flickers. Momentum and rubber-band scrolling cross one
+ * value repeatedly on the way past it, and every crossing restarts the nav's
+ * 200ms height/size transitions — under the nav's backdrop blur that reads as
+ * the header glitching. The dead band between these two means nothing
+ * re-triggers until the scroll position has genuinely moved.
+ */
+const NAV_CONDENSE_AT = 72;
+const NAV_EXPAND_AT = 24;
+
+/**
+ * Below this much scrollable room, never condense.
+ *
+ * The nav is `position: sticky`, so it is still in flow: condensing shortens
+ * the document by the height it gives up. Scrolled to the very bottom of a
+ * short page, the browser then has to clamp scrollY to the new maximum — which
+ * fires another scroll event, which can flip the state back, which restores the
+ * height. That oscillation is the "glitches when I scroll all the way down"
+ * case, and the short tabs (Water, QA Codes) are where the page is short enough
+ * to hit it. There is no vertical space worth reclaiming on a page that barely
+ * scrolls anyway.
+ */
+const NAV_MIN_SCROLLABLE = 160;
+
 function initNavCondense() {
   const nav = document.getElementById('site-nav');
   if (!nav) return;
 
   let ticking = false;
+  let condensed = false;
+
   const update = () => {
-    const condensed = window.scrollY > 40;
+    ticking = false;
+
+    const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+    const y = window.scrollY;
+
+    // Which threshold applies depends on the state we are already in.
+    const next = scrollable < NAV_MIN_SCROLLABLE ? false
+               : condensed ? y > NAV_EXPAND_AT
+               : y > NAV_CONDENSE_AT;
+
+    // Bail before touching classList: re-asserting the same state every frame
+    // is what keeps the transitions alive.
+    if (next === condensed) return;
+
+    condensed = next;
     nav.classList.toggle('condensed', condensed);
     document.body.classList.toggle('nav-condensed', condensed);
-    ticking = false;
   };
 
   window.addEventListener('scroll', () => {

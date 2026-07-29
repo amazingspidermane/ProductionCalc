@@ -272,10 +272,18 @@
   transition: font-size 200ms ease;
 }
 
-/* Tab strip sticks directly beneath whatever height the nav currently is. */
+/* Tab strip sticks directly beneath whatever height the nav currently is.
+ *
+ * `top` is switched, never transitioned. A sticky element's offset is resolved
+ * against `top` on every scroll frame, so animating it means the browser is
+ * chasing a value that moves underneath it — the strip visibly detaches from
+ * the nav, overlaps it, or opens a gap, then snaps back. That is the flicker.
+ *
+ * Snapping instead is free here: the strip only becomes stuck once it has
+ * scrolled up to meet the nav, which is far past the point where the nav has
+ * already condensed. The switch happens while the strip is still in flow. */
 .tab-strip {
   top: 5rem;
-  transition: top 200ms ease;
 }
 body.nav-condensed .tab-strip {
   top: 3.5rem;
