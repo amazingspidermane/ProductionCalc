@@ -295,9 +295,19 @@ body.nav-condensed .tab-strip {
 .bubble {
   position: absolute;
   bottom: -20px;
-  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.1) 50%, transparent 100%);
-  border: 1.5px solid rgba(255, 255, 255, 0.5);
-  box-shadow: inset -2px -2px 6px rgba(0, 0, 0, 0.04), inset 2px 2px 6px rgba(255, 255, 255, 0.8);
+  /* Light mode sits on a near-white backdrop (#eef0f4), so an all-white bubble
+     would be invisible. The rim and the outer half of the fill carry a brand
+     tint to pick up the red glows in `body`; the white specular highlight at
+     35%/35% is what still reads as glass. */
+  background: radial-gradient(circle at 35% 35%,
+    rgba(255, 255, 255, 0.85) 0%,
+    rgba(248, 51, 77, 0.1) 45%,
+    rgba(186, 15, 44, 0.18) 100%);
+  border: 1.5px solid rgba(186, 15, 44, 0.3);
+  box-shadow:
+    inset -2px -2px 6px rgba(186, 15, 44, 0.12),
+    inset 2px 2px 6px rgba(255, 255, 255, 0.85),
+    0 1px 3px rgba(15, 23, 42, 0.08);
   border-radius: 50%;
   opacity: 0;
   left: var(--left);
@@ -308,9 +318,13 @@ body.nav-condensed .tab-strip {
   animation-delay: var(--delay);
 }
 
+/* Dark sits on #0b1120, where plain white already reads as glass — no tint
+   needed, just less of it. Restates `box-shadow` deliberately: inheriting the
+   light rule's would leak red insets onto a dark backdrop. */
 .dark .bubble {
   background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.06) 50%, transparent 100%);
-  border-color: rgba(255, 255, 255, 0.22);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  box-shadow: inset -2px -2px 6px rgba(0, 0, 0, 0.04), inset 2px 2px 6px rgba(255, 255, 255, 0.8);
 }
 
 @keyframes rise {
