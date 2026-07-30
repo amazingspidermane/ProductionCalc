@@ -2398,17 +2398,27 @@ const RUN_LINES_KEY = 'prodcalc.runLines.v1';
 /**
  * The pack sizes this plant actually runs, matching the Syrup tab exactly.
  *
- * There are no 6-pack or 12-pack rows, because neither is a case size here: a
- * "12-pack" is a 12x2 case and a "6-pack" is a 6x4 case. Both hold 24 units and
- * both convert at 24. The label spells out both configs so an operator running
- * either recognises this as their row — entering 6 or 12 would divide the
- * standard-case count, and the syrup with it, by four or two.
+ * The value is **cans per counted case**, not the name of the pack, because
+ * `packToStandardCases` divides it by 24. The floor names thirteen packs —
+ * 4, 6, 8, 10, 12, 15, 18, 20, 24, 28, 30, 32 and 35 — but they are counted as
+ * shipper cases, and several names ship in the same case:
+ *
+ * - 4x6, 6x4, 8x3 and 12x2 all ship as a case of 24.
+ * - 15x2 and 10x3 both ship as a case of 30.
+ *
+ * So those eight names collapse onto the 24 and 30 rows rather than earning
+ * rows of their own. Each label spells out every config that lands there, so an
+ * operator running any of them recognises this as their row — entering the
+ * sold-unit number instead (12 for a 12-pack, 15 for a 15-pack) would divide
+ * the standard-case count, and the syrup with it, by two, three or four.
  */
 const PACK_SIZES = [
   { value: 18, label: '18-Pack' },
   { value: 20, label: '20-Pack' },
-  { value: 24, label: '24-Pack (12x2 / 6x4)' },
-  { value: 30, label: '30-Pack' },
+  { value: 24, label: '24-Pack (12x2 / 6x4 / 8x3 / 4x6)' },
+  { value: 28, label: '28-Pack' },
+  { value: 30, label: '30-Pack (15x2 / 10x3)' },
+  { value: 32, label: '32-Pack' },
   { value: 35, label: '35-Pack' },
 ];
 
